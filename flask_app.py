@@ -1,0 +1,127 @@
+from flask import Flask, request, jsonify
+import sqlite3
+import time
+import os
+import json
+import uuid
+
+app = Flask(__name__)
+
+# Guarantee the DB is created in the exact directory as this script
+DB_PATH = os.path.join(os.path.dirname(__file__), 'infrastructure.db')
+
+def get_db():
+    db = sqlite3.connect(DB_PATH)
+    db.execute('PRAGMA journal_mode=WAL;')
+
+    # Primitive 1: Ephemeral State
+    db.execute('''CREATE TABLE IF NOT EXISTS store
+                  (key TEXT PRIMARY KEY, value TEXT, expires_at REAL)''')
+
+    # Primitive 2: Coordination (Intent Bus)
+    db.execute('''CREATE TABLE IF NOT EXISTS intents
+                  (id TEXT PRIMARY KEY, goal TEXT, payload TEXT, status TEXT, reward INTEGER, claimed_at REAL)''')
+
+    return db
+
+# ==========================================
+# PRIMITIVE 1: EPHEMERAL STATE (CLIPBOARD)
+# ==========================================
+
+@app.route('/set/<key>', methods=['POST', 'GET'])
+def set_clipboard(key):
+    value = request.args.get('value')
+    ttl = int(request.args.get('ttl', 600))
+    if not value: return jsonify({"error": "No value provided"}), 400
+    db = get_db()
+    db.execute('INSERT OR REPLACE INTO store (key, value, expires_at) VALUES (?, ?, ?)',
+               (key, value, time.time() + ttl))
+    db.commit()
+    db.close()
+    return jsonify({"status": "success", "key": key}), 200
+
+@app.route('/get/<key>', methods=['GET'])
+def get_clipboard(key):
+    db = get_db()
+    row = db.execute('SELECT value, expires_at FROM store WHERE key = ?', (key,)).fetchone()
+    if not row:
+        db.close()
+        return jsonify({"error": "Key not found"}), 404
+    if time.time() > row[1]:
+        db.execute('DELETE FROM store WHERE key = ?', (key,))
+        db.commit()
+        db.close()
+        return jsonify({"error": "Key expired"}), 404
+    db.close()
+    return jsonify({"key": key, "value": row[0]}), 200
+
+
+# ==========================================
+# PRIMITIVE 2: COORDINATION (INTENT BUS)
+# ==========================================
+
+@app.route('/intent', methods=['POST'])
+def create_intent():
+    data = request.json
+    intent_id = str(uuid.uuid4())[:8]
+    db = get_db()
+    db.execute('INSERT INTO intents (id, goal, payload, status, reward, claimed_at) VALUES (?, ?, ?, ?, ?, ?)',
+               (intent_id, data['goal'], json.dumps(data['payload']), 'open', data.get('reward', 0), 0.0))
+    db.commit()
+    db.close()
+    return jsonify({"id": intent_id, "status": "published"}), 201
+
+@app.route('/claim', methods=['POST'])
+def claim_intent():
+    # Allow workers to request specific goals (Topic Routing)
+    target_goal = request.args.get('goal')
+
+    db = get_db()
+    now = time.time()
+
+    # Dynamically build the SQL query with FIFO chronological ordering
+    query = "SELECT id, goal, payload, reward FROM intents WHERE (status = 'open' OR (status = 'claimed' AND claimed_at < ?))"
+    params = [now - 60]
+
+    if target_goal:
+        query += " AND goal = ?"
+        params.append(target_goal)
+
+    query += " ORDER BY rowid ASC LIMIT 1"
+
+    cursor = db.execute(query, tuple(params))
+    row = cursor.fetchone()
+
+    if not row:
+        db.close()
+        return jsonify({"status": "empty"}), 200
+
+    intent_id = row[0]
+
+    # The Atomic Lock
+    update_query = "UPDATE intents SET status = 'claimed', claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_at < ?))"
+    update_cursor = db.execute(update_query, (now, intent_id, now - 60))
+
+    # Race Condition Preventer: Ensure we actually acquired the lock
+    if update_cursor.rowcount == 0:
+        db.close()
+        return jsonify({"status": "empty"}), 200
+
+    db.commit()
+    db.close()
+
+    return jsonify({
+        "id": row[0],
+        "goal": row[1],
+        "payload": json.loads(row[2]),
+        "reward": row[3]
+    }), 200
+
+@app.route('/fulfill/<intent_id>', methods=['POST'])
+def fulfill_intent(intent_id):
+    db = get_db()
+    db.execute("UPDATE intents SET status = 'fulfilled' WHERE id = ?", (intent_id,))
+    db.commit()
+    db.close()
+    return jsonify({"id": intent_id, "status": "fulfilled"}), 200
+  
