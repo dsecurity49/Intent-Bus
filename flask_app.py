@@ -1,12 +1,27 @@
-from flask import Flask, request, jsonify
+import os
 import sqlite3
 import time
-import os
 import json
 import uuid
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# ==========================================
+# AUTHENTICATION
+# ==========================================
+# This looks for the secret set in the PythonAnywhere WSGI file
+API_KEY = os.environ.get("BUS_SECRET")
+
+def check_auth():
+    # If no key is set on the server, block everything for safety
+    if not API_KEY:
+        return False
+    return request.headers.get("X-API-KEY") == API_KEY
+
+# ==========================================
+# DATABASE SETUP
+# ==========================================
 # Guarantee the DB is created in the exact directory as this script
 DB_PATH = os.path.join(os.path.dirname(__file__), 'infrastructure.db')
 
@@ -24,15 +39,22 @@ def get_db():
 
     return db
 
+@app.route('/')
+def index():
+    return "Intent Bus is Active (Private).", 200
+
 # ==========================================
 # PRIMITIVE 1: EPHEMERAL STATE (CLIPBOARD)
 # ==========================================
 
 @app.route('/set/<key>', methods=['POST', 'GET'])
 def set_clipboard(key):
+    if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
+    
     value = request.args.get('value')
     ttl = int(request.args.get('ttl', 600))
     if not value: return jsonify({"error": "No value provided"}), 400
+    
     db = get_db()
     db.execute('INSERT OR REPLACE INTO store (key, value, expires_at) VALUES (?, ?, ?)',
                (key, value, time.time() + ttl))
@@ -42,16 +64,20 @@ def set_clipboard(key):
 
 @app.route('/get/<key>', methods=['GET'])
 def get_clipboard(key):
+    if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
+    
     db = get_db()
     row = db.execute('SELECT value, expires_at FROM store WHERE key = ?', (key,)).fetchone()
     if not row:
         db.close()
         return jsonify({"error": "Key not found"}), 404
+        
     if time.time() > row[1]:
         db.execute('DELETE FROM store WHERE key = ?', (key,))
         db.commit()
         db.close()
         return jsonify({"error": "Key expired"}), 404
+        
     db.close()
     return jsonify({"key": key, "value": row[0]}), 200
 
@@ -62,6 +88,8 @@ def get_clipboard(key):
 
 @app.route('/intent', methods=['POST'])
 def create_intent():
+    if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
+    
     data = request.json
     intent_id = str(uuid.uuid4())[:8]
     db = get_db()
@@ -73,6 +101,8 @@ def create_intent():
 
 @app.route('/claim', methods=['POST'])
 def claim_intent():
+    if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
+    
     # Allow workers to request specific goals (Topic Routing)
     target_goal = request.args.get('goal')
 
@@ -119,9 +149,21 @@ def claim_intent():
 
 @app.route('/fulfill/<intent_id>', methods=['POST'])
 def fulfill_intent(intent_id):
+    if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
+    
     db = get_db()
     db.execute("UPDATE intents SET status = 'fulfilled' WHERE id = ?", (intent_id,))
     db.commit()
     db.close()
     return jsonify({"id": intent_id, "status": "fulfilled"}), 200
-  
+
+@app.route('/admin/purge', methods=['POST'])
+def purge_queue():
+    if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
+
+    db = get_db()
+    db.execute("DELETE FROM intents")
+    db.commit()
+    db.close()
+    return jsonify({"status": "Queue cleared"}), 200
+           
