@@ -97,11 +97,17 @@ curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
 3. Deploy `flask_app.py`
 
 ### Worker (Termux / any Linux)
-1. Store your API key locally:
+1. Install prerequisites:
+   ```bash
+   pkg install jq curl       # Termux
+   sudo apt install jq curl  # Linux
+   ```
+2. Store your API key and make scripts executable:
    ```bash
    echo "your_key_here" > .apikey
+   chmod +x worker.sh logger.sh
    ```
-2. Run a worker:
+3. Run a worker:
    ```bash
    ./worker.sh
    ```
