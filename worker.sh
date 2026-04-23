@@ -7,7 +7,7 @@ fi
 
 API_KEY=$(cat ~/.apikey)
 BUS_URL="https://dsecurity.pythonanywhere.com"
-RESPONSE_FILE="$TMPDIR/worker_response.json"
+RESPONSE_FILE="${TMPDIR:-/tmp}/worker_response.json"
 
 echo "[WORKER] Booting up. Listening for 'send_notification' intents..."
 
