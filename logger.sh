@@ -7,7 +7,7 @@ fi
 
 API_KEY=$(cat ~/.apikey)
 BUS_URL="https://dsecurity.pythonanywhere.com"
-RESPONSE_FILE="$TMPDIR/logger_response.json"
+RESPONSE_FILE="${TMPDIR:-/tmp}/logger_response.json"
 
 echo "[LOGGER] Booting up. Listening for 'log_event' intents..."
 
