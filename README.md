@@ -25,7 +25,20 @@ Intent Bus lives in the gap. A single Flask app + SQLite gives you real job coor
 - Let a Termux worker on your phone execute jobs posted from a cloud server
 
 ---
+## Community Workers (Coming Soon)
 
+These worker scripts don't exist yet — PRs welcome.
+
+- **Discord Alert** — claim a `discord_alert` intent, POST to a webhook URL *(example included)*
+- **Free SMS Gateway** — claim an `sms_alert` intent, send via `termux-sms-send` on an old Android phone. Zero Twilio costs.
+- **Firewall Bypass Deployer** — claim a `trigger_deploy` intent, run `git pull && systemctl restart`. No open ports, no Ngrok.
+- **Uptime Watchdog** — push a `discord_alert` intent when a site goes down. Chains with the Discord worker automatically.
+- **Telegram Bot** — claim a `telegram_message` intent, send via Bot API
+- **Email via SMTP** — claim a `send_email` intent, send via local SMTP config
+- **Twilio SMS** — claim a `send_sms` intent, forward payload to Twilio API
+- **Webhook Relay** — claim any intent, forward payload to a configurable URL
+- **Postgres Backup** — claim a `backup_db` intent, run `pg_dump` locally
+---
 ## How It Works
 
 ### 1. Push an Intent
