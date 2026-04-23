@@ -121,6 +121,7 @@ curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
 | `flask_app.py` | Core Flask server — intent bus + ephemeral store |
 | `worker.sh` | Termux worker — listens for `send_notification` intents |
 | `logger.sh` | Logger worker — listens for `log_event` intents |
+| `SPEC.md` | Intent Protocol v1.0 specification |
 
 ---
 
