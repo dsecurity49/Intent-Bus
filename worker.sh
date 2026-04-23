@@ -1,12 +1,18 @@
 #!/bin/bash
 
+if [ ! -f ~/.apikey ]; then
+  echo "[ERROR] ~/.apikey not found. Create it with: echo 'your_key' > ~/.apikey"
+  exit 1
+fi
+
 API_KEY=$(cat ~/.apikey)
 BUS_URL="https://dsecurity.pythonanywhere.com"
+RESPONSE_FILE="$TMPDIR/worker_response.json"
 
 echo "[WORKER] Booting up. Listening for 'send_notification' intents..."
 
 while true; do
-  HTTP_STATUS=$(curl -s -o /tmp/worker_response.json -w "%{http_code}" -X POST \
+  HTTP_STATUS=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST \
     "$BUS_URL/claim?goal=send_notification" \
     -H "X-API-Key: $API_KEY")
 
@@ -15,7 +21,12 @@ while true; do
     continue
   fi
 
-  RESPONSE=$(cat /tmp/worker_response.json)
+  if [ "$HTTP_STATUS" -ne 200 ]; then
+    echo "[ERROR] Server returned $HTTP_STATUS. Check your API key."
+    exit 1
+  fi
+
+  RESPONSE=$(cat "$RESPONSE_FILE")
   ID=$(echo $RESPONSE | jq -r '.id')
   MESSAGE=$(echo $RESPONSE | jq -r '.payload.message')
 
