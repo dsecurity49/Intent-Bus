@@ -7,36 +7,22 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# ==========================================
-# AUTHENTICATION
-# ==========================================
-# This looks for the secret set in the PythonAnywhere WSGI file
+# 1. AUTH LOGIC
 API_KEY = os.environ.get("BUS_SECRET")
 
 def check_auth():
-    # If no key is set on the server, block everything for safety
-    if not API_KEY:
-        return False
     return request.headers.get("X-API-KEY") == API_KEY
 
-# ==========================================
-# DATABASE SETUP
-# ==========================================
-# Guarantee the DB is created in the exact directory as this script
+# 2. DATABASE LOGIC
 DB_PATH = os.path.join(os.path.dirname(__file__), 'infrastructure.db')
 
 def get_db():
     db = sqlite3.connect(DB_PATH)
     db.execute('PRAGMA journal_mode=WAL;')
-
-    # Primitive 1: Ephemeral State
     db.execute('''CREATE TABLE IF NOT EXISTS store
                   (key TEXT PRIMARY KEY, value TEXT, expires_at REAL)''')
-
-    # Primitive 2: Coordination (Intent Bus)
     db.execute('''CREATE TABLE IF NOT EXISTS intents
                   (id TEXT PRIMARY KEY, goal TEXT, payload TEXT, status TEXT, reward INTEGER, claimed_at REAL)''')
-
     return db
 
 @app.route('/')
@@ -50,11 +36,11 @@ def index():
 @app.route('/set/<key>', methods=['POST', 'GET'])
 def set_clipboard(key):
     if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
-    
+
     value = request.args.get('value')
     ttl = int(request.args.get('ttl', 600))
     if not value: return jsonify({"error": "No value provided"}), 400
-    
+
     db = get_db()
     db.execute('INSERT OR REPLACE INTO store (key, value, expires_at) VALUES (?, ?, ?)',
                (key, value, time.time() + ttl))
@@ -65,19 +51,19 @@ def set_clipboard(key):
 @app.route('/get/<key>', methods=['GET'])
 def get_clipboard(key):
     if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
-    
+
     db = get_db()
     row = db.execute('SELECT value, expires_at FROM store WHERE key = ?', (key,)).fetchone()
     if not row:
         db.close()
         return jsonify({"error": "Key not found"}), 404
-        
+
     if time.time() > row[1]:
         db.execute('DELETE FROM store WHERE key = ?', (key,))
         db.commit()
         db.close()
         return jsonify({"error": "Key expired"}), 404
-        
+
     db.close()
     return jsonify({"key": key, "value": row[0]}), 200
 
@@ -89,7 +75,7 @@ def get_clipboard(key):
 @app.route('/intent', methods=['POST'])
 def create_intent():
     if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
-    
+
     data = request.json
     intent_id = str(uuid.uuid4())[:8]
     db = get_db()
@@ -102,14 +88,11 @@ def create_intent():
 @app.route('/claim', methods=['POST'])
 def claim_intent():
     if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
-    
-    # Allow workers to request specific goals (Topic Routing)
-    target_goal = request.args.get('goal')
 
+    target_goal = request.args.get('goal')
     db = get_db()
     now = time.time()
 
-    # Dynamically build the SQL query with FIFO chronological ordering
     query = "SELECT id, goal, payload, reward FROM intents WHERE (status = 'open' OR (status = 'claimed' AND claimed_at < ?))"
     params = [now - 60]
 
@@ -118,24 +101,20 @@ def claim_intent():
         params.append(target_goal)
 
     query += " ORDER BY rowid ASC LIMIT 1"
-
     cursor = db.execute(query, tuple(params))
     row = cursor.fetchone()
 
     if not row:
         db.close()
-        return jsonify({"status": "empty"}), 200
+        return '', 204
 
     intent_id = row[0]
-
-    # The Atomic Lock
     update_query = "UPDATE intents SET status = 'claimed', claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_at < ?))"
     update_cursor = db.execute(update_query, (now, intent_id, now - 60))
 
-    # Race Condition Preventer: Ensure we actually acquired the lock
     if update_cursor.rowcount == 0:
         db.close()
-        return jsonify({"status": "empty"}), 200
+        return '', 204
 
     db.commit()
     db.close()
@@ -150,7 +129,7 @@ def claim_intent():
 @app.route('/fulfill/<intent_id>', methods=['POST'])
 def fulfill_intent(intent_id):
     if not check_auth(): return jsonify({"error": "Unauthorized"}), 401
-    
+
     db = get_db()
     db.execute("UPDATE intents SET status = 'fulfilled' WHERE id = ?", (intent_id,))
     db.commit()
@@ -166,4 +145,3 @@ def purge_queue():
     db.commit()
     db.close()
     return jsonify({"status": "Queue cleared"}), 200
-           
