@@ -11,6 +11,8 @@ app = Flask(__name__)
 API_KEY = os.environ.get("BUS_SECRET")
 
 def check_auth():
+    if not API_KEY:
+        return False
     return request.headers.get("X-API-KEY") == API_KEY
 
 # 2. DATABASE LOGIC
