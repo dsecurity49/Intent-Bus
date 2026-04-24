@@ -14,6 +14,8 @@ Most automation tools force you to choose between:
 
 Intent Bus lives in the gap. A single Flask app + SQLite gives you real job coordination with zero infrastructure overhead.
 
+📖 [Read the full writeup on Dev.to](https://dev.to/d_security/how-i-control-my-android-phone-from-a-cloud-server-using-100-lines-of-flask-2fl6)
+
 ---
 
 ```mermaid
