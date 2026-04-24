@@ -16,6 +16,13 @@ Intent Bus lives in the gap. A single Flask app + SQLite gives you real job coor
 
 ---
 
+```mermaid
+graph LR
+    A[Cloud Scraper<br/>PythonAnywhere] -->|POST /intent| B[Intent Bus<br/>Flask + SQLite]
+    B -->|claim + fulfill| C[Termux Worker<br/>Android Phone]
+    C -->|termux-notification| D[📱 Phone Notification]
+```
+---
 ## Example Use Cases
 
 - Run a scraper on a remote server and trigger a notification on your phone when it finishes
