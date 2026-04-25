@@ -151,6 +151,15 @@ curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
 
 All endpoints require an `X-API-Key` header. The key is stored server-side in an environment variable and never committed to the repo. This is a **Phase 1** project — do not store sensitive secrets in payloads.
 
+## Try It Live
+
+The hosted instance at `https://dsecurity.pythonanywhere.com` is live.
+
+To request an API key for testing, contact me via:
+- Dev.to: https://dev.to/d_security
+- GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues
+- Discord: https://discord.gg/aPUqtMW6
+
 ## License
 
 MIT
