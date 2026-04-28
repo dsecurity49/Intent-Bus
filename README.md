@@ -184,7 +184,7 @@ The hosted instance at `https://dsecurity.pythonanywhere.com` is live.
 To request a free tester API key, contact me via:
 - Dev.to: https://dev.to/d_security
 - GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues
-- Discord: https://discord.gg/aPUqtMW6
+- Discord: https://discord.gg/bzAneAQzGX
 
 ---
 
