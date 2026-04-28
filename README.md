@@ -24,7 +24,9 @@ graph LR
     B -->|claim + fulfill| C[Termux Worker<br/>Android Phone]
     C -->|termux-notification| D[📱 Phone Notification]
 ```
+
 ---
+
 ## Example Use Cases
 
 - Run a scraper on a remote server and trigger a notification on your phone when it finishes
@@ -34,6 +36,7 @@ graph LR
 - Let a Termux worker on your phone execute jobs posted from a cloud server
 
 ---
+
 ## Community Workers (Coming Soon)
 
 These worker scripts don't exist yet — PRs welcome.
@@ -47,7 +50,9 @@ These worker scripts don't exist yet — PRs welcome.
 - **Twilio SMS** — claim a `send_sms` intent, forward payload to Twilio API
 - **Webhook Relay** — claim any intent, forward payload to a configurable URL
 - **Postgres Backup** — claim a `backup_db` intent, run `pg_dump` locally
+
 ---
+
 ## How It Works
 
 ### 1. Push an Intent
@@ -96,13 +101,16 @@ curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
 * **Atomic locking** — SQLite UPDATE with rowcount check prevents race conditions
 * **Topic routing** — workers only claim jobs matching their goal via `?goal=`
 * **Auto-requeue** — 60s lock expiry handles crashed workers gracefully
+* **Rate limiting** — 60 requests per minute per key+IP combination
+* **Tester keys** — admin can generate isolated keys for external users
+* **Intent expiry** — intents auto-expire after 24 hours
 * **Ephemeral key-value store** — bonus `/set` and `/get` endpoints for lightweight clipboard-style state sharing
 * **Auth** — all endpoints require an `X-API-Key` header
 
 ## Stack
 
 * **Backend:** Flask + SQLite, hosted on PythonAnywhere
-* **Workers:** Plain bash scripts (runs anywhere — Termux, VPS, cron)
+* **Workers:** Bash scripts or Python (runs anywhere — Termux, VPS, cron)
 * *No Docker required*
 
 ---
@@ -126,12 +134,26 @@ curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
    ```
 2. Store your API key and make scripts executable:
    ```bash
-   echo "your_key_here" > .apikey
+   echo "your_key_here" > ~/.apikey
    chmod +x worker.sh logger.sh
    ```
 3. Run a worker:
    ```bash
    ./worker.sh
+   ```
+
+### Python Worker (cross-platform)
+1. Install prerequisites:
+   ```bash
+   pip install requests
+   ```
+2. Store your API key:
+   ```bash
+   echo "your_key_here" > ~/.apikey
+   ```
+3. Run with a goal:
+   ```bash
+   python examples/python_worker.py --goal notify
    ```
 
 ---
@@ -143,22 +165,28 @@ curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
 | `flask_app.py` | Core Flask server — intent bus + ephemeral store |
 | `worker.sh` | Termux worker — listens for `send_notification` intents |
 | `logger.sh` | Logger worker — listens for `log_event` intents |
+| `examples/discord_worker.sh` | Example worker — relays intents to a Discord channel |
+| `examples/python_worker.py` | Python worker — cross-platform, supports notify/log/sys goals |
 | `SPEC.md` | Intent Protocol v1.0 specification |
 
 ---
 
 ## Security
 
-All endpoints require an `X-API-Key` header. The key is stored server-side in an environment variable and never committed to the repo. This is a **Phase 1** project — do not store sensitive secrets in payloads.
+All endpoints require an `X-API-Key` header. The key is stored server-side in an environment variable and never committed to the repo. Rate limiting is enforced at 60 requests per minute per key. This is a **Phase 1** project — do not store sensitive secrets in payloads.
+
+---
 
 ## Try It Live
 
 The hosted instance at `https://dsecurity.pythonanywhere.com` is live.
 
-To request an API key for testing, contact me via:
+To request a free tester API key, contact me via:
 - Dev.to: https://dev.to/d_security
 - GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues
 - Discord: https://discord.gg/aPUqtMW6
+
+---
 
 ## License
 
