@@ -273,13 +273,15 @@ def set_val(key):
 @app.route("/get/<key>")
 def get_val(key):
     row = get_db().execute(
-        "SELECT * FROM store WHERE key=?", (key,)
+        "SELECT * FROM store WHERE key=? AND expires_at > ?", 
+        (key, now())
     ).fetchone()
 
-    if not row or now() > row["expires_at"]:
-        return jsonify({"error": "not found"}), 404
+    if not row:
+        return jsonify({"error": "not found or expired"}), 404
 
     return jsonify({"value": row["value"]})
+
 
 # --- INTENTS ---
 @app.route("/intent", methods=["POST"])
