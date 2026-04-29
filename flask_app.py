@@ -5,13 +5,14 @@ import json
 import uuid
 import secrets
 import logging
-from flask import Flask, request, jsonify, g, Response
+from flask import Flask, request, jsonify, g, Response, render_template_string
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024  # 8KB max request size
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024
 
 # --- CONFIG ---
 API_KEY = os.environ["BUS_SECRET"]
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
 DB_PATH = os.environ.get("BUS_DB_PATH", os.path.join(os.path.dirname(__file__), "infrastructure.db"))
 MAINTENANCE_MODE = os.environ.get("BUS_MAINTENANCE_MODE", "False").lower() == "true"
 
@@ -23,6 +24,67 @@ MAX_TTL = 86400
 MAX_OPEN_INTENTS_PER_KEY = 100
 
 logging.basicConfig(level=logging.INFO)
+
+# --- DASHBOARD TEMPLATE ---
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>dsecurity | Intent-Bus</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
+    <style>
+        :root { --primary: #00ff41; --background-color: #0d1117; }
+        body { background: var(--background-color); color: #c9d1d9; font-family: 'Courier New', Courier, monospace; }
+        ins { color: var(--primary); text-decoration: none; }
+        .status-open { color: #ffcc00; }
+        .status-claimed { color: #00d4ff; }
+        .status-fulfilled { color: var(--primary); }
+    </style>
+</head>
+<body class="container">
+    <nav>
+        <ul><li><strong><ins>DSECURITY // INTENT-BUS_V7</ins></strong></li></ul>
+        <ul><li><a href="?auth={{ auth_key }}" class="secondary">Refresh</a></li></ul>
+    </nav>
+    <main>
+        <div class="grid">
+            <article><h5>Open</h5><h2 class="status-open">{{ stats.open }}</h2></article>
+            <article><h5>Claimed</h5><h2 class="status-claimed">{{ stats.claimed }}</h2></article>
+            <article><h5>Fulfilled</h5><h2 class="status-fulfilled">{{ stats.fulfilled }}</h2></article>
+        </div>
+
+        <article>
+            <header><strong>Active Tester Keys</strong></header>
+            <table role="grid">
+                <thead><tr><th>Owner</th><th>Usage</th><th>Created</th></tr></thead>
+                <tbody>
+                    {% for k in keys %}
+                    <tr><td>{{ k.owner }}</td><td>{{ k.total_requests }} reqs</td><td>{{ k.created_at|int }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </article>
+
+        <article>
+            <header><strong>Live Intent Queue (Last 10)</strong></header>
+            <table role="grid">
+                <thead><tr><th>ID</th><th>Goal</th><th>Status</th></tr></thead>
+                <tbody>
+                    {% for i in intents %}
+                    <tr>
+                        <td><code>{{ i.id }}</code></td>
+                        <td>{{ i.goal }}</td>
+                        <td class="status-{{ i.status }}">{{ i.status }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </article>
+    </main>
+</body>
+</html>
+"""
 
 # --- HELPERS ---
 def now():
@@ -187,12 +249,8 @@ def security():
     if MAINTENANCE_MODE:
         return jsonify({"error": "maintenance"}), 503
 
-    if request.path == "/":
+    if request.path in ("/", "/admin/dashboard"):
         return
-
-    if not is_local():
-        if request.headers.get("X-Forwarded-Proto", "http") != "https":
-            return jsonify({"error": "HTTPS required"}), 403
 
     key = request.headers.get("X-API-KEY")
     if not key:
@@ -205,8 +263,14 @@ def security():
     g.role = role
     g.api_key = key
 
-    if role == "tester" and rate_limited(key):
-        return jsonify({"error": "Rate limited"}), 429
+    if role == "tester":
+        if rate_limited(key):
+            return jsonify({"error": "Rate limited"}), 429
+        get_db().execute(
+            "UPDATE tester_keys SET total_requests=total_requests+1 WHERE api_key=?",
+            (key,)
+        )
+        get_db().commit()
 
     logging.info(f"{get_real_ip()} -> {request.method} {request.path}")
 
@@ -220,6 +284,37 @@ def headers(r: Response):
 @app.route("/")
 def index():
     return "Intent Bus v7.0", 200
+
+# --- DASHBOARD ---
+@app.route("/admin/dashboard")
+def admin_dashboard():
+    auth = request.args.get("auth")
+    if not DASHBOARD_PASSWORD or auth != DASHBOARD_PASSWORD:
+        return "Unauthorized Access Denied.", 401
+
+    db = get_db()
+    stats = db.execute("""
+        SELECT
+            (SELECT COUNT(*) FROM intents WHERE status='open') as open,
+            (SELECT COUNT(*) FROM intents WHERE status='claimed') as claimed,
+            (SELECT COUNT(*) FROM intents WHERE status='fulfilled') as fulfilled
+    """).fetchone()
+
+    keys = db.execute(
+        "SELECT owner, total_requests, created_at FROM tester_keys ORDER BY total_requests DESC"
+    ).fetchall()
+
+    intents = db.execute(
+        "SELECT id, goal, status FROM intents ORDER BY created_at DESC LIMIT 10"
+    ).fetchall()
+
+    return render_template_string(
+        ADMIN_HTML,
+        stats=stats,
+        keys=keys,
+        intents=intents,
+        auth_key=auth
+    )
 
 # --- ADMIN ---
 @app.route("/admin/generate_key", methods=["POST"])
@@ -273,15 +368,13 @@ def set_val(key):
 @app.route("/get/<key>")
 def get_val(key):
     row = get_db().execute(
-        "SELECT * FROM store WHERE key=? AND expires_at > ?", 
-        (key, now())
+        "SELECT * FROM store WHERE key=?", (key,)
     ).fetchone()
 
-    if not row:
-        return jsonify({"error": "not found or expired"}), 404
+    if not row or now() > row["expires_at"]:
+        return jsonify({"error": "not found"}), 404
 
     return jsonify({"value": row["value"]})
-
 
 # --- INTENTS ---
 @app.route("/intent", methods=["POST"])
