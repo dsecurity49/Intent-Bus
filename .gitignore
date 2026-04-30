@@ -1,5 +1,69 @@
-.apikey
-infrastructure.db
+# =========================
+# Python
+# =========================
 __pycache__/
-*.pyc
-bus.log
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# Virtual Environments
+# =========================
+.env
+.venv
+env/
+venv/
+ENV/
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Logs
+# =========================
+*.log
+bus_logs.txt
+
+# =========================
+# Intent Bus Runtime Data
+# =========================
+infrastructure.db
+infrastructure.db-wal
+infrastructure.db-shm
+
+# =========================
+# Secrets (CRITICAL)
+# =========================
+.apikey
+.env.*
+*.pem
+*.key
+
+# =========================
+# Testing / Coverage
+# =========================
+.coverage
+htmlcov/
+.pytest_cache/
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.bak
