@@ -1,127 +1,399 @@
-# Intent Protocol Specification (v1.0)
+# RFC: Intent Protocol
+## Version 1.0
 
-This document defines the standard for the Intent Bus protocol. Any server or worker that adheres to this specification is considered Intent-compatible.
+### Status
+Draft
 
----
+### Author
+Dsecurity
 
-## 1. Core Concepts
-
-* **Bus:** The central message broker (HTTP server + data store).
-* **Worker:** A client that polls the Bus, claims Intents, executes local scripts, and fulfills them.
-* **Intent:** A single, atomic unit of work containing a goal and a payload.
-* **Goal:** A string identifier used to route Intents to the correct Worker (e.g., `send_notification`, `backup_db`).
-
----
-
-## 2. Authentication
-
-All requests to the Bus MUST include the `X-API-Key` header.
-
-| Header | Value | Requirement |
-| :--- | :--- | :--- |
-| `X-API-Key` | `<SECRET_STRING>` | Required for all endpoints |
-
-*If the key is missing or invalid, the Bus MUST return `401 Unauthorized`.*
+### Date
+2026-04-30
 
 ---
 
-## 3. The Intent Object
+## Abstract
 
-When pushing or claiming an Intent, the payload must follow this JSON schema:
+The Intent Protocol defines a lightweight, HTTP-based job coordination system for unreliable networks and distributed workers.
+
+It provides:
+- At-least-once delivery
+- Atomic job claiming
+- Retry and failure handling
+- Optional cryptographic request authentication
+
+The protocol is designed to operate without external infrastructure and is suitable for environments ranging from mobile devices to cloud servers.
+
+---
+
+## 1. Terminology
+
+The key words **MUST**, **SHOULD**, and **MAY** are to be interpreted as described in RFC 2119.
+
+- **Intent**: A unit of work submitted to the system.
+- **Worker**: A client that claims and executes intents.
+- **Publisher**: A client that creates intents.
+- **Bus**: The server implementing this protocol.
+
+---
+
+## 2. Overview
+
+The protocol operates over HTTP and defines a shared state machine for job execution.
+
+A publisher submits an Intent.  
+A worker claims it, executes it, and marks it complete.
+
+The system guarantees:
+- Jobs are not silently lost
+- Jobs may be retried if execution fails
+
+---
+
+## 3. Intent Lifecycle
+
+### 3.1 States
+
+An Intent MUST exist in one of the following states:
+
+- **open** — Available for claiming  
+- **claimed** — Locked by a worker  
+- **fulfilled** — Successfully completed (terminal)  
+- **failed** — Permanently failed (terminal)  
+
+---
+
+### 3.2 State Transitions
+
+| From     | To         | Condition |
+|----------|-----------|----------|
+| open     | claimed   | Worker claims job |
+| claimed  | fulfilled | Worker completes job |
+| claimed  | failed    | Worker explicitly fails job |
+| claimed  | open      | Claim timeout expires |
+| claimed  | failed    | Retry limit exceeded |
+
+---
+
+### 3.3 Retry Semantics
+
+- A claim lock MUST expire after a fixed timeout (default: 60 seconds)
+- A job MUST be retried if it is not fulfilled before timeout
+- A job MUST transition to `failed` if:
+  - `claim_attempts >= MAX_ATTEMPTS` (default: 3)
+
+---
+
+## 4. Authentication
+
+The protocol defines two authentication modes.
+
+Servers MUST support both.
+
+---
+
+### 4.1 Standard Authentication
+
+Clients MUST include:
+
+```
+X-API-KEY: <key>
+```
+
+Requirements:
+- MUST be used over HTTPS
+- Provides authentication only (no replay protection)
+
+---
+
+### 4.2 Strict Authentication (HMAC)
+
+Clients MAY use request signing for enhanced security.
+
+---
+
+### 4.3 Required Headers
+
+```
+X-API-KEY: <key>
+X-Timestamp: <unix timestamp>
+X-Nonce: <unique value>
+X-Signature: <lowercase hex digest>
+```
+
+---
+
+### 4.4 Validation Rules
+
+Servers MUST:
+
+- Reject timestamps outside ±300 seconds
+- Reject reused nonces per API key
+- Validate HMAC signature
+
+Servers SHOULD:
+
+- Limit nonce storage to a bounded window
+- Enforce per-key nonce quotas
+
+---
+
+### 4.5 Signature Construction
+
+The signature MUST be computed as the SHA-256 HMAC of the following payload, using the API key as the secret.
+
+The result MUST be encoded as a lowercase hexadecimal string.
+
+```
+METHOD \n
+CANONICAL_PATH \n
+TIMESTAMP \n
+NONCE \n
+BODY
+```
+
+- `METHOD` MUST be uppercase
+- `BODY` MUST be the raw request body (or empty if none)
+
+---
+
+### 4.6 Canonical Path
+
+- MUST include path and query string
+- Query parameters MUST be:
+  - Sorted lexicographically by key
+  - Percent-encoded per RFC 3986
+
+Example:
+
+```
+/claim?goal=notify
+```
+
+---
+
+## 5. Intent Object
+
+Returned when a job is successfully claimed:
 
 ```json
 {
-  "id": "abc12345",
-  "goal": "send_notification",
-  "payload": {
-    "key": "value"
-  },
-  "status": "open",
-  "claimed_at": 0.0
+  "id": "string",
+  "goal": "string",
+  "payload": {},
+  "claim_attempts": 1
 }
 ```
 
-### Field Definitions
+---
 
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `id` | String | Unique identifier (e.g., first 8 chars of a UUIDv4). Generated by the server. |
-| `goal` | String | The topic/routing key. |
-| `payload` | Object | Arbitrary JSON data required to execute the job. |
-| `status` | String | Enum: `open`, `claimed`, `fulfilled`, `failed`. |
-| `claimed_at` | Float | Unix timestamp of when the Intent was claimed. |
+## 6. API Definition
 
 ---
 
-## 4. API Endpoints
+### 6.1 Create Intent
 
-### 4.1 Push an Intent
-**`POST /intent`**
+**POST /intent**
 
-Pushes a new Intent onto the Bus.
+Creates a new intent.
 
-* **Request Body:**
-  ```json
-  {
-    "goal": "string",
-    "payload": {}
-  }
-  ```
-* **Success Response:** `201 Created` (Returns the created Intent ID).
+#### Request
 
-### 4.2 Claim an Intent
-**`POST /claim?goal=<GOAL_NAME>`**
+```json
+{
+  "goal": "string",
+  "payload": {}
+}
+```
 
-Workers use this to atomically lock and retrieve an open Intent.
+#### Constraints
 
-* **Query Parameter:** `goal` (Required). The Worker only receives Intents matching this goal.
-* **Execution Lock:** The Bus MUST update the status to `claimed` and record the `claimed_at` timestamp before returning the response.
-* **Auto-Requeue:** If an Intent remains `claimed` for more than 60 seconds without being fulfilled, the Bus MUST automatically revert its status back to `open` on the next claim attempt.
-* **Success Response:** `200 OK` (Returns the full Intent JSON object).
-* **Empty Response:** `204 No Content` (If no open Intents match the goal).
+- `goal` MUST be a non-empty string
+- `payload` MUST be a JSON object
 
-### 4.3 Fulfill an Intent
-**`POST /fulfill/<INTENT_ID>`**
+#### Optional Header
 
-Workers call this after successful execution to clear the job.
+```
+Idempotency-Key: <UUID>
+```
 
-* **URL Parameter:** The `id` of the Intent.
-* **Execution:** The Bus updates the Intent status to `fulfilled`.
-* **Success Response:** `200 OK`
+#### Behavior
 
-### 4.4 Purge Queue (Admin)
-**`POST /admin/purge`**
+- Server MUST ensure idempotency if header is present
+- Reuse of the same key with a different body MUST return `409 Conflict`
 
-Clears all Intents from the Bus. Use with caution.
+#### Responses
 
-* **Success Response:** `200 OK` with body `{"status": "Queue cleared"}`
+- `201 Created`
+- `400 Bad Request`
+- `409 Conflict`
 
 ---
 
-## 5. Worker Lifecycle (The Polling Loop)
+### 6.2 Claim Intent
 
-A compliant Worker MUST implement the following loop:
+**POST /claim**
 
-1. **Poll:** Send `POST /claim?goal=<TARGET>` at a set interval (e.g., every 10 seconds).
-2. **Lock:** If a `200 OK` is received with a full Intent object, parse the JSON. The Worker now holds a 60-second execution lock.
-3. **Execute:** Pass the `.payload` data to the local script or function.
-4. **Fulfill:** If execution succeeds, send `POST /fulfill/<id>` to mark the job complete.
-5. **Fail (Optional):** If execution fails, the Worker can either send a fail signal, or simply let the 60-second lock expire so another Worker can retry.
+Optional query:
+
+```
+?goal=<string>
+```
+
+#### Behavior
+
+- MUST atomically select and lock a job
+- MUST increment `claim_attempts`
+- MUST only return jobs that are:
+  - `open`, OR
+  - `claimed` but expired
+
+#### Responses
+
+- `200 OK` (returns intent)
+- `204 No Content`
 
 ---
 
-## 6. Ephemeral State (Clipboard Primitive)
+### 6.3 Fulfill Intent
 
-The Bus also provides a lightweight key-value store for sharing ephemeral state between scripts.
+**POST /fulfill/<id>**
 
-### 6.1 Set a Key
-**`POST /set/<key>?value=<VALUE>&ttl=<SECONDS>`**
+#### Behavior
 
-* **Query Parameters:** `value` (Required), `ttl` (Optional, default 600 seconds).
-* **Success Response:** `200 OK`
+- MUST transition intent to `fulfilled`
+- MUST only allow the claiming worker to fulfill
 
-### 6.2 Get a Key
-**`GET /get/<key>`**
+#### Responses
 
-* **Success Response:** `200 OK` (Returns `{"key": "...", "value": "..."}`)
-* **Not Found / Expired:** `404 Not Found`
+- `200 OK`
+- `404 Not Found`
+
+---
+
+### 6.4 Fail Intent
+
+**POST /fail/<id>**
+
+#### Request
+
+```json
+{
+  "error": "string"
+}
+```
+
+#### Behavior
+
+- MUST transition intent to `failed`
+- SHOULD store error message (truncated if necessary)
+
+#### Responses
+
+- `200 OK`
+- `404 Not Found`
+
+---
+
+## 7. Ephemeral Key-Value Store
+
+A scoped key-value store for coordination between clients.
+
+Keys MUST be isolated per API key.
+
+---
+
+### 7.1 Set Value
+
+**POST /set/<key>**
+
+```json
+{
+  "value": "string",
+  "ttl": 600
+}
+```
+
+- `ttl` MUST be bounded by server limits
+
+---
+
+### 7.2 Get Value
+
+**GET /get/<key>**
+
+Responses:
+
+- `200 OK`
+```json
+{ "value": "..." }
+```
+
+- `404 Not Found`
+
+---
+
+## 8. Guarantees
+
+Implementations MUST provide:
+
+- At-least-once delivery
+- Atomic job claiming
+- Retry on failure
+- Poison pill protection
+- Per-key isolation
+
+---
+
+## 9. Non-Goals
+
+The protocol does NOT guarantee:
+
+- Exactly-once execution
+- Message ordering
+- Distributed consensus
+- Infinite scalability
+
+---
+
+## 10. Security Considerations
+
+- API keys MUST be kept secret
+- HTTPS MUST be enforced
+- Replay attacks MUST be mitigated (Strict Auth)
+- Servers SHOULD implement rate limiting
+- Servers SHOULD enforce payload size limits
+- Servers SHOULD validate input types
+
+---
+
+## 11. Implementation Notes
+
+- SQLite is sufficient for single-node deployments
+- Locking SHOULD be transactional (e.g., `BEGIN IMMEDIATE`)
+- Cleanup of expired jobs SHOULD be periodic
+- Systems SHOULD handle database contention gracefully
+
+---
+
+## 12. Versioning
+
+- Version: 1.0
+- Breaking changes MUST increment major version
+- Additive changes SHOULD be backward-compatible
+
+---
+
+## 13. Compatibility
+
+An implementation is compliant if it:
+
+- Implements required endpoints
+- Enforces authentication rules
+- Maintains lifecycle guarantees
+
+---
+
+## License
+
+MIT
