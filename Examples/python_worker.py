@@ -1,75 +1,151 @@
-import time
-import requests
-import subprocess
-import argparse
 import os
+import sys
+import argparse
+import subprocess
+import logging
+from typing import Dict, List
+from intent_bus import IntentClient
 
-# --- CONFIG ---
-BASE_URL = "https://yourusername.pythonanywhere.com"
-POLL_INTERVAL = 5
+# -------------------------------
+# Configuration
+# -------------------------------
 
-try:
-    with open(os.path.expanduser("~/.apikey")) as f:
-        API_KEY = f.read().strip()
-except FileNotFoundError:
-    print("[!] Error: ~/.apikey file not found.")
-    exit(1)
+DEFAULT_INTERVAL = 5
+MAX_OUTPUT_LENGTH = 1000
 
-ALLOWED_SYS_CMDS = {
-    "storage": ["df", "-h"],
+# Whitelisted commands (SAFE MODE)
+ALLOWED_COMMANDS: Dict[str, List[str]] = {
     "uptime": ["uptime"],
-    "battery": ["termux-battery-status"]
+    "date": ["date"],
+    "disk": ["df", "-h"],
+    "memory": ["free", "-m"],
+    "whoami": ["whoami"]
 }
 
-def execute_action(goal, payload):
-    if goal == "notify":
-        msg = payload.get("message", "No content")
-        subprocess.run(["termux-notification", "-t", "Bus Alert", "-c", msg])
-    
-    elif goal == "log":
-        with open("bus_log.txt", "a") as f:
-            f.write(f"{time.ctime()} | {payload}\n")
-            
-    elif goal == "sys":
-        cmd_key = payload.get("cmd")
-        if cmd_key in ALLOWED_SYS_CMDS:
-            print(f"[*] Executing allowed system command: {cmd_key}")
-            subprocess.run(ALLOWED_SYS_CMDS[cmd_key])
-        else:
-            print(f"[!] Blocked unauthorized system command request: {cmd_key}")
+# -------------------------------
+# Logging Setup
+# -------------------------------
 
-def run_worker(goal):
-    print(f"[*] Intent Bus Worker Online | Goal: {goal}")
-    headers = {"X-API-KEY": API_KEY, "Content-Type": "application/json"}
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("IntentWorker")
 
-    while True:
-        try:
-            res = requests.post(f"{BASE_URL}/claim?goal={goal}", headers=headers, timeout=10)
-            
-            if res.status_code == 204:
-                time.sleep(POLL_INTERVAL)
-                continue
-                
-            if res.status_code == 200:
-                job = res.json()
-                job_id = job['id']
-                print(f"[+] Processing {job_id}")
-                
-                execute_action(goal, job['payload'])
-                
-                fulfill_res = requests.post(f"{BASE_URL}/fulfill/{job_id}", headers=headers, timeout=10)
-                if fulfill_res.status_code == 200:
-                    print(f"[✓] Intent {job_id} fulfilled")
-                else:
-                    print(f"[!] Fulfill failed for {job_id}: HTTP {fulfill_res.status_code}")
-                
-        except Exception as e:
-            print(f"[!] Error: {e}")
-            
-        time.sleep(POLL_INTERVAL)
+
+# -------------------------------
+# Helpers
+# -------------------------------
+
+def load_api_key(path: str) -> str:
+    if not os.path.exists(path):
+        logger.error(f"API key not found at {path}")
+        sys.exit(1)
+
+    with open(path, "r") as f:
+        return f.read().strip()
+
+
+def safe_execute(command: List[str]) -> str:
+    """
+    Executes a whitelisted command safely.
+    """
+    result = subprocess.run(
+        command,
+        shell=False,
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+
+    return result.stdout.strip()[:MAX_OUTPUT_LENGTH]
+
+
+# -------------------------------
+# Handler
+# -------------------------------
+
+def handle_sys_command(payload: dict) -> bool:
+    """
+    Safe handler using command whitelist.
+
+    Expected payload:
+    {
+        "cmd": "uptime"
+    }
+    """
+
+    cmd_key = payload.get("cmd")
+
+    if not cmd_key:
+        raise ValueError("Missing 'cmd' in payload")
+
+    if cmd_key not in ALLOWED_COMMANDS:
+        raise ValueError(f"Command '{cmd_key}' is not allowed")
+
+    command = ALLOWED_COMMANDS[cmd_key]
+
+    logger.info({
+        "event": "execute",
+        "command": command
+    })
+
+    output = safe_execute(command)
+
+    logger.info({
+        "event": "success",
+        "output": output
+    })
+
+    return True
+
+
+# -------------------------------
+# Main
+# -------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Intent Bus Production Worker (Strict Auth)"
+    )
+    parser.add_argument("--goal", default="sys", help="Goal to listen for")
+    parser.add_argument("--url", default="https://dsecurity.pythonanywhere.com")
+    parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
+    parser.add_argument("--key-path", default="~/.apikey")
+    args = parser.parse_args()
+
+    api_key_path = os.path.expanduser(args.key_path)
+    api_key = load_api_key(api_key_path)
+
+    client = IntentClient(
+        api_key=api_key,
+        base_url=args.url
+    )
+
+    logger.info("===================================")
+    logger.info("INTENT BUS WORKER STARTED")
+    logger.info(f"Mode        : SAFE (whitelisted commands)")
+    logger.info(f"Goal        : {args.goal}")
+    logger.info(f"Server      : {args.url}")
+    logger.info(f"Poll Interval: {args.interval}s")
+    logger.info("===================================")
+
+    try:
+        client.listen(
+            goal=args.goal,
+            handler=handle_sys_command,
+            interval=args.interval
+        )
+    except KeyboardInterrupt:
+        logger.info("Shutdown requested by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--goal", required=True, help="The job type to poll for")
-    args = parser.parse_args()
-    run_worker(args.goal)
+    main()
