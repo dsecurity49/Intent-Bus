@@ -31,7 +31,7 @@ FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_PAYLOAD = 5 * 1024
 MAX_TTL = 86400
 MAX_OPEN_INTENTS_PER_KEY = 100
-MAX_NONCES_PER_KEY = 5000  # Mitigation for Nonce DoS (Issue 3)
+MAX_NONCES_PER_KEY = 5000  # Mitigation for Nonce DoS
 
 logging.basicConfig(level=logging.INFO)
 
@@ -147,7 +147,7 @@ def dashboard_auth_ok():
     auth = request.authorization
     if not auth or not isinstance(auth.password, str) or not isinstance(auth.username, str):
         return False
-    # Issue 7: Dashboard auth is weak -> enforce username and rate-limit capable structure
+    # Enforce username for basic auth
     if auth.username != "admin":
         return False
     return hmac.compare_digest(auth.password, DASHBOARD_PASSWORD)
@@ -248,7 +248,6 @@ def cleanup():
         except Exception:
             pass
         if "locked" in str(e).lower():
-            # Issue 8: Silent failure in cleanup() -> Add observability
             logging.warning("[!] Cleanup skipped: Database locked")
             return
         raise
@@ -285,7 +284,7 @@ def verify_signed_request(api_key):
 
     raw_body = request.get_data(cache=True, as_text=False) or b""
     
-    # Issue 2: HMAC canonical path inconsistency -> Properly normalize query string
+    # Properly normalize query string to prevent HMAC mismatch
     parsed = parse_qsl(request.query_string.decode('utf-8'), keep_blank_values=True)
     canonical_query = urlencode(sorted(parsed), doseq=True)
     canonical_path = request.path
@@ -309,7 +308,7 @@ def verify_signed_request(api_key):
     try:
         db.execute("BEGIN IMMEDIATE")
         
-        # Issue 3: Nonce table = potential DoS vector -> Cap nonces per key
+        # Cap nonces per key to prevent DoS
         nonce_count = db.execute("SELECT COUNT(*) FROM request_nonces WHERE api_key=?", (api_key,)).fetchone()[0]
         if nonce_count > MAX_NONCES_PER_KEY:
             db.rollback()
@@ -356,8 +355,8 @@ def rate_limited(key):
             db.rollback()
         except Exception:
             pass
-        # Issue 4: Rate limit bypass on DB lock -> Fail closed
-        logging.warning(f"[!] Rate limit check failed open due to DB lock for {identifier}")
+        # Fail closed on DB lock
+        logging.warning(f"[!] Rate limit check failed closed due to DB lock for {identifier}")
         return True
 
 @app.before_request
@@ -367,7 +366,7 @@ def security():
     if MAINTENANCE_MODE:
         return api_error("maintenance", "The bus is currently undergoing maintenance.", 503)
 
-    # Issue 1: request.is_secure is fragile -> Explicit X-Forwarded-Proto check
+    # Explicit HTTPS check
     if not is_local() and request.headers.get("X-Forwarded-Proto", "http") != "https":
         return api_error("https_required", "HTTPS is required.", 403)
 
@@ -504,7 +503,7 @@ def create_intent():
             db.rollback()
             return api_error("invalid_request", "Goal must be a non-empty string.")
             
-        # Issue 6: Missing payload validation for types -> Enforce dict
+        # Strict payload validation
         if not isinstance(data["payload"], dict):
             db.rollback()
             return api_error("invalid_payload", "Payload must be a JSON object/dictionary.")
@@ -560,7 +559,7 @@ def claim():
             query += " AND goal=?"
             params.append(target_goal)
 
-        # Issue 5: Claim endpoint can starve fairness -> ORDER BY created_at ASC
+        # Claim fairness: ORDER BY created_at ASC
         row = db.execute(query + " ORDER BY created_at ASC LIMIT 1", params).fetchone()
         
         if not row:
