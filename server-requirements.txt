@@ -1,0 +1,5 @@
+# Intent Bus | Core Server Requirements
+# Minimalist, stable, and low-footprint.
+
+Flask==3.0.2
+Werkzeug==3.0.1
