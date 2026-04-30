@@ -1,193 +1,263 @@
 # Intent Bus
 
-POST a job → any script, anywhere, can pick it up and execute it.
+[![PyPI version](https://img.shields.io/pypi/v/intent-bus.svg)](https://pypi.org/project/intent-bus/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A dead-simple SQLite-backed job bus for cross-device script coordination. Built for developers who need something more reliable than cron scripts but don't want the overhead of Redis, RabbitMQ, or Firebase.
+> **Run code on any device from anywhere — using just HTTP.**
+
+A zero-infrastructure job coordination system with retries, locking, and cross-device workers.  
+Built for developers who want something more reliable than cron, without the overhead of Redis, RabbitMQ, or Firebase.
+
+📖 [Read the full story](https://dev.to/d_security/how-i-control-my-android-phone-from-a-cloud-server-using-100-lines-of-flask-2fl6)
 
 ---
 
-## Why Intent Bus?
+## 🔥 What makes this different?
 
-Most automation tools force you to choose between:
-- **Too simple:** hardcoded cron jobs with no coordination
-- **Too complex:** full message queues that need servers, configs, and maintenance
+- Trigger your **Android phone from a cloud server**
+- Run jobs across devices **without opening ports**
+- Build distributed systems using **just HTTP + curl**
+- No brokers, no queues, no infrastructure
 
-Intent Bus lives in the gap. A single Flask app + SQLite gives you real job coordination with zero infrastructure overhead.
+> No Firebase. No message queues. Just a single Flask file.
 
-📖 [Read the full writeup on Dev.to](https://dev.to/d_security/how-i-control-my-android-phone-from-a-cloud-server-using-100-lines-of-flask-2fl6)
+---
+
+## 🧠 How it works (30 seconds)
+
+1. A client **POSTs a job** to `/intent`
+2. Workers **poll `/claim`** for matching jobs
+3. One worker **atomically claims** the job (SQLite lock)
+4. Worker executes and calls `/fulfill`
+5. If it crashes → job is **automatically retried**
 
 ---
 
 ```mermaid
 graph LR
-    A[Cloud Scraper<br/>PythonAnywhere] -->|POST /intent| B[Intent Bus<br/>Flask + SQLite]
-    B -->|claim + fulfill| C[Termux Worker<br/>Android Phone]
-    C -->|termux-notification| D[📱 Phone Notification]
+    A[Cloud Script<br/>PythonAnywhere] -->|POST /intent| B[Intent Bus<br/>Flask + SQLite]
+    B -->|claim + fulfill| C[Worker<br/>Termux / Linux / VPS]
+    C -->|execute task| D[📱 Phone / System Action]
 ```
 
 ---
 
-## Example Use Cases
+## 🤔 Why not just use X?
 
-- Run a scraper on a remote server and trigger a notification on your phone when it finishes
-- Coordinate multiple scripts without hardcoding dependencies between them
-- Replace messy cron pipelines with loosely-coupled workers
-- Cross-device automation without Firebase or message queues
-- Let a Termux worker on your phone execute jobs posted from a cloud server
-
----
-
-## Community Workers (Coming Soon)
-
-These worker scripts don't exist yet — PRs welcome.
-
-- **Discord Alert** — claim a `discord_alert` intent, POST to a webhook URL *(example included)*
-- **Free SMS Gateway** — claim an `sms_alert` intent, send via `termux-sms-send` on an old Android phone. Zero Twilio costs.
-- **Firewall Bypass Deployer** — claim a `trigger_deploy` intent, run `git pull && systemctl restart`. No open ports, no Ngrok.
-- **Uptime Watchdog** — push a `discord_alert` intent when a site goes down. Chains with the Discord worker automatically.
-- **Telegram Bot** — claim a `telegram_message` intent, send via Bot API
-- **Email via SMTP** — claim a `send_email` intent, send via local SMTP config
-- **Twilio SMS** — claim a `send_sms` intent, forward payload to Twilio API
-- **Webhook Relay** — claim any intent, forward payload to a configurable URL
-- **Postgres Backup** — claim a `backup_db` intent, run `pg_dump` locally
+| Tool | Problem |
+|------|--------|
+| **Cron** | No coordination, no retries, silent failures |
+| **Redis / Celery** | Requires running and maintaining a server |
+| **RabbitMQ** | Heavy infra, steep learning curve |
+| **Firebase** | Vendor lock-in, SDK bloat, pricing |
+| **Intent Bus** | ✅ Single file, deploy anywhere |
 
 ---
 
-## How It Works
+## 👥 Who is this for?
 
-### 1. Push an Intent
+- Developers running scripts across multiple machines
+- People using **Termux / Android automation**
+- Indie hackers avoiding infrastructure complexity
+- Anyone who wants job queues without Redis/RabbitMQ
+
+---
+
+## 🔐 Authentication (Dual-Auth Model)
+
+Intent Bus supports two modes:
+
+### 1. Standard Auth (Simple)
+- Just pass:
+
+```bash
+X-API-KEY: your_key
+```
+
+- Works with:
+  - curl
+  - bash scripts
+  - IoT devices
+
+---
+
+### 2. Strict Auth (Recommended for production)
+- HMAC-SHA256 signed requests
+- Nonce-based replay protection
+- Handled automatically by the Python SDK
+
+---
+
+## 🚀 Quickstart (Python SDK - Strict Auth)
+
+```bash
+pip install intent-bus
+```
+
+### Publish a job
+
+```python
+from intent_bus import IntentClient
+
+client = IntentClient(api_key="your_key_here")
+
+job = client.publish(
+    goal="send_notification",
+    payload={"message": "Hello from the cloud"}
+)
+
+print(job["id"])
+```
+
+### Run a worker
+
+```python
+from intent_bus import IntentClient
+
+def handler(payload):
+    print("Received:", payload["message"])
+
+client = IntentClient(api_key="your_key_here")
+
+# Blocking loop
+client.listen(goal="send_notification", handler=handler)
+```
+
+---
+
+## ⚙️ Quickstart (CURL / Bash - Standard Auth)
+
+### 1. Publish a job
 
 ```bash
 curl -X POST https://dsecurity.pythonanywhere.com/intent \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your_key_here" \
-  -d '{"goal":"send_notification","payload":{"message":"Hello from the cloud"}}'
+  -d '{"goal":"send_notification","payload":{"message":"Hello"}}'
 ```
 
-### 2. Claim an Intent (Worker)
-
-Workers poll for jobs matching their goal. The atomic lock ensures only one worker executes each job.
+### 2. Worker loop
 
 ```bash
-curl -s -X POST https://dsecurity.pythonanywhere.com/claim?goal=send_notification \
+# Claim
+curl -s -X POST "https://dsecurity.pythonanywhere.com/claim?goal=send_notification" \
+  -H "X-API-Key: your_key_here"
+
+# Fulfill
+curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
   -H "X-API-Key: your_key_here"
 ```
 
-Example response:
-
-```json
-{
-  "id": "abc123",
-  "goal": "send_notification",
-  "payload": {
-    "message": "Hello from the cloud"
-  }
-}
-```
-
-### 3. Fulfill an Intent
-
-```bash
-curl -s -X POST https://dsecurity.pythonanywhere.com/fulfill/abc123 \
-  -H "X-API-Key: your_key_here"
-```
-
-*Note: If an intent is claimed but not fulfilled within 60 seconds, the lock expires and it goes back into the queue automatically.*
+> If a job isn’t fulfilled within 60 seconds, it is automatically retried.
 
 ---
 
-## Features
+## 🧩 Example Use Cases
 
-* **Atomic locking** — SQLite UPDATE with rowcount check prevents race conditions
-* **Topic routing** — workers only claim jobs matching their goal via `?goal=`
-* **Auto-requeue** — 60s lock expiry handles crashed workers gracefully
-* **Rate limiting** — 60 requests per minute per key+IP combination
-* **Tester keys** — admin can generate isolated keys for external users
-* **Intent expiry** — intents auto-expire after 24 hours
-* **Ephemeral key-value store** — bonus `/set` and `/get` endpoints for lightweight clipboard-style state sharing
-* **Auth** — all endpoints require an `X-API-Key` header
-
-## Stack
-
-* **Backend:** Flask + SQLite, hosted on PythonAnywhere
-* **Workers:** Bash scripts or Python (runs anywhere — Termux, VPS, cron)
-* *No Docker required*
+- Trigger a **phone notification** when a scraper finishes
+- Run scripts across multiple machines without hardcoding dependencies
+- Replace cron pipelines with loosely coupled workers
+- Execute remote commands via Termux without exposing ports
 
 ---
 
-## Setup
+## ⚡ Features
+
+- **At-Least-Once Delivery** — jobs are retried automatically
+- **Atomic Locking** — SQLite transactions prevent race conditions
+- **Poison Pill Handling** — failed jobs stop after 3 attempts
+- **Goal Routing** — workers filter jobs via `?goal=`
+- **Rate Limiting** — 60 req/min per key + IP
+- **Tester Keys** — isolate external users
+- **Ephemeral KV Store** — `/set` and `/get` endpoints
+
+---
+
+## 🏗️ Architecture Guarantees
+
+- Jobs are **never silently lost**
+- Only one worker can claim a job at a time
+- Workers can crash safely without breaking the system
+
+---
+
+## ⚠️ Limitations
+
+- SQLite = **not designed for high concurrency**
+- Best for **low to medium traffic workloads**
+- Not a replacement for Kafka / RabbitMQ at scale
+
+---
+
+## 🛠️ Setup
 
 ### Server (PythonAnywhere)
-1. Clone the repo
-2. Set your API key as an environment variable in your WSGI config:
-   ```python
-   import os
-   os.environ['BUS_SECRET'] = 'your_key_here'
-   ```
+
+1. Clone the repo  
+2. Set your API key in WSGI:
+
+```python
+import os
+os.environ['BUS_SECRET'] = 'your_key_here'
+```
+
 3. Deploy `flask_app.py`
 
-### Worker (Termux / any Linux)
-1. Install prerequisites:
-   ```bash
-   pkg install jq curl       # Termux
-   sudo apt install jq curl  # Linux
-   ```
-2. Store your API key and make scripts executable:
-   ```bash
-   echo "your_key_here" > ~/.apikey
-   chmod +x worker.sh logger.sh
-   ```
-3. Run a worker:
-   ```bash
-   ./worker.sh
-   ```
+---
 
-### Python Worker (cross-platform)
-1. Install prerequisites:
-   ```bash
-   pip install requests
-   ```
-2. Store your API key:
-   ```bash
-   echo "your_key_here" > ~/.apikey
-   ```
-3. Run with a goal:
-   ```bash
-   python examples/python_worker.py --goal notify
-   ```
+### Worker (Termux / Linux)
+
+```bash
+pkg install jq curl     # Termux
+sudo apt install jq curl
+```
+
+```bash
+echo "your_key_here" > ~/.apikey
+chmod +x worker.sh
+./worker.sh
+```
 
 ---
 
-## Files
+## 🌍 Try It Live
 
-| File | Purpose |
-| :--- | :--- |
-| `flask_app.py` | Core Flask server — intent bus + ephemeral store |
-| `worker.sh` | Termux worker — listens for `send_notification` intents |
-| `logger.sh` | Logger worker — listens for `log_event` intents |
-| `examples/discord_worker.sh` | Example worker — relays intents to a Discord channel |
-| `examples/python_worker.py` | Python worker — cross-platform, supports notify/log/sys goals |
-| `SPEC.md` | Intent Protocol v1.0 specification |
+Public instance:
 
----
+```
+https://dsecurity.pythonanywhere.com
+```
 
-## Security
-
-All endpoints require an `X-API-Key` header. The key is stored server-side in an environment variable and never committed to the repo. Rate limiting is enforced at 60 requests per minute per key. This is a **Phase 1** project — do not store sensitive secrets in payloads.
-
----
-
-## Try It Live
-
-The hosted instance at `https://dsecurity.pythonanywhere.com` is live.
-
-To request a free tester API key, contact me via:
+To get a tester key:
 - Dev.to: https://dev.to/d_security
 - GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues
 - Discord: https://discord.gg/bzAneAQzGX
 
 ---
 
-## License
+## 💡 Why I built this
+
+I wanted to trigger scripts on my Android phone from a cloud server  
+without Firebase, open ports, or complex infrastructure.
+
+So I built a tiny job bus using Flask + SQLite.
+
+It worked — and became this project.
+
+---
+
+## 📁 Files
+
+| File | Purpose |
+|------|--------|
+| `flask_app.py` | Core server |
+| `worker.sh` | Termux worker |
+| `logger.sh` | Logging worker |
+| `Examples/` | Sample workers |
+| `SPEC.md` | Protocol spec |
+
+---
+
+## 📜 License
 
 MIT
