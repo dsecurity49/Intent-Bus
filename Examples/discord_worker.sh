@@ -1,57 +1,141 @@
-#!/bin/bash
-# A ready-to-use worker that relays Intents to a Discord channel.
-# Usage: ./discord_worker.sh
+#!/usr/bin/env bash
 
-if [ ! -f ../.apikey ]; then
-  echo "[ERROR] ../.apikey not found. See README."
+# Intent Bus | Discord Webhook Worker (Production Grade)
+# Relays 'discord_alert' intents safely to Discord.
+
+set -euo pipefail
+
+API_KEY_FILE="${HOME}/.apikey"
+BASE_URL="https://dsecurity.pythonanywhere.com"
+GOAL="discord_alert"
+
+SLEEP_IDLE=5
+SLEEP_ERROR=10
+SLEEP_SUCCESS=2
+
+MAX_CONTENT_LENGTH=1900
+CURL_TIMEOUT=10
+
+# --- Dependency Checks ---
+command -v jq >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "curl is required"; exit 1; }
+
+# --- Load API Key ---
+if [[ ! -f "$API_KEY_FILE" ]]; then
+  echo "[!] API key not found at $API_KEY_FILE"
   exit 1
 fi
 
-if [ ! -f .discord_webhook ]; then
-  echo "[ERROR] .discord_webhook not found."
-  echo "Create it: echo 'https://discord.com/api/webhooks/...' > .discord_webhook"
-  exit 1
-fi
+API_KEY=$(cat "$API_KEY_FILE")
 
-API_KEY=$(cat ../.apikey)
-DISCORD_URL=$(cat .discord_webhook)
-BUS_URL="https://dsecurity.pythonanywhere.com"
-RESPONSE_FILE="${TMPDIR:-/tmp}/discord_response.json"
+echo "===================================="
+echo "DSECURITY // DISCORD RELAY WORKER"
+echo "Goal        : $GOAL"
+echo "Server      : $BASE_URL"
+echo "Mode        : SAFE (validated webhook)"
+echo "===================================="
 
-echo "[DISCORD WORKER] Listening for 'discord_alert' intents..."
+# Graceful shutdown
+trap "echo 'Shutting down worker...'; exit 0" SIGINT SIGTERM
 
 while true; do
-  HTTP_STATUS=$(curl -s -o "$RESPONSE_FILE" -w "%{http_code}" -X POST \
-    "$BUS_URL/claim?goal=discord_alert" \
-    -H "X-API-Key: $API_KEY")
 
-  if [ "$HTTP_STATUS" -eq 204 ]; then
-    sleep 5
+  # -------------------------------
+  # 1. Claim Intent
+  # -------------------------------
+  HTTP_RESPONSE=$(curl -s --max-time $CURL_TIMEOUT -w "\n%{http_code}" \
+    -X POST "$BASE_URL/claim?goal=$GOAL" \
+    -H "X-API-KEY: $API_KEY")
+
+  BODY=$(echo "$HTTP_RESPONSE" | head -n -1)
+  STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
+
+  if [[ "$STATUS" == "204" ]]; then
+    sleep $SLEEP_IDLE
     continue
   fi
 
-  if [ "$HTTP_STATUS" -ne 200 ]; then
-    echo "[ERROR] Server returned $HTTP_STATUS."
-    exit 1
+  if [[ "$STATUS" != "200" ]]; then
+    echo "[!] Server error: HTTP $STATUS"
+    sleep $SLEEP_ERROR
+    continue
   fi
 
-  RESPONSE=$(cat "$RESPONSE_FILE")
-  ID=$(echo $RESPONSE | jq -r '.id')
-  MESSAGE=$(echo $RESPONSE | jq -r '.payload.message')
+  # -------------------------------
+  # 2. Validate JSON
+  # -------------------------------
+  if ! echo "$BODY" | jq . >/dev/null 2>&1; then
+    echo "[!] Invalid JSON received"
+    sleep $SLEEP_ERROR
+    continue
+  fi
 
-  echo "[DISCORD WORKER] Claimed Intent $ID. Pushing to Discord..."
-  
-  # Safely construct the JSON payload to prevent formatting/injection errors
-  BODY=$(jq -nc --arg msg "$MESSAGE" '{"content": $msg}')
-  
-  # 1. Execute the actual work (Send to Discord)
-  curl -s -H "Content-Type: application/json" \
-       -d "$BODY" \
-       "$DISCORD_URL" > /dev/null
-  
-  # 2. Fulfill the intent on the Bus
-  curl -s -X POST "$BUS_URL/fulfill/$ID" \
-    -H "X-API-Key: $API_KEY" > /dev/null
+  ID=$(echo "$BODY" | jq -r '.id // empty')
+  WEBHOOK_URL=$(echo "$BODY" | jq -r '.payload.webhook_url // empty')
+  CONTENT=$(echo "$BODY" | jq -r '.payload.content // empty')
 
-  echo "[DISCORD WORKER] Intent $ID fulfilled."
+  if [[ -z "$ID" || -z "$WEBHOOK_URL" || -z "$CONTENT" ]]; then
+    echo "[!] Invalid payload for job $ID"
+
+    curl -s --max-time $CURL_TIMEOUT -X POST "$BASE_URL/fail/$ID" \
+      -H "X-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"error":"Missing webhook_url or content"}' > /dev/null
+
+    sleep $SLEEP_ERROR
+    continue
+  fi
+
+  # -------------------------------
+  # 3. Validate Webhook URL
+  # -------------------------------
+  if [[ "$WEBHOOK_URL" != https://discord.com/api/webhooks/* ]]; then
+    echo "[!] Rejected invalid webhook for job $ID"
+
+    curl -s --max-time $CURL_TIMEOUT -X POST "$BASE_URL/fail/$ID" \
+      -H "X-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"error":"Invalid webhook URL"}' > /dev/null
+
+    sleep $SLEEP_ERROR
+    continue
+  fi
+
+  # -------------------------------
+  # 4. Prepare Payload
+  # -------------------------------
+  CONTENT=$(echo "$CONTENT" | cut -c1-$MAX_CONTENT_LENGTH)
+
+  JSON_PAYLOAD=$(jq -n --arg content "$CONTENT" '{content: $content}')
+
+  echo "[$(date +%T)] Relaying job $ID..."
+
+  # -------------------------------
+  # 5. Send to Discord
+  # -------------------------------
+  DISCORD_STATUS=$(curl -s --max-time $CURL_TIMEOUT \
+    -o /dev/null -w "%{http_code}" \
+    -X POST "$WEBHOOK_URL" \
+    -H "Content-Type: application/json" \
+    -d "$JSON_PAYLOAD")
+
+  # -------------------------------
+  # 6. Fulfill / Fail
+  # -------------------------------
+  if [[ "$DISCORD_STATUS" =~ ^2 ]]; then
+    curl -s --max-time $CURL_TIMEOUT -X POST "$BASE_URL/fulfill/$ID" \
+      -H "X-API-KEY: $API_KEY" > /dev/null
+
+    echo "   -> Success"
+    sleep $SLEEP_SUCCESS
+  else
+    curl -s --max-time $CURL_TIMEOUT -X POST "$BASE_URL/fail/$ID" \
+      -H "X-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "{\"error\":\"Discord HTTP $DISCORD_STATUS\"}" > /dev/null
+
+    echo "   -> Failed (HTTP $DISCORD_STATUS)"
+    sleep $SLEEP_ERROR
+  fi
+
 done
