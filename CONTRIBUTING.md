@@ -13,7 +13,7 @@ Intent Bus is built on three core principles:
 We are defining a **protocol standard** (`RFC: Intent Protocol`), not just a Flask app.
 
 Any change to the server MUST consider:
-- Bash / cURL clients
+- Bash / CURL clients
 - Official SDKs (Python)
 - Future ports (Go, Rust, Node, etc.)
 
@@ -50,7 +50,7 @@ Workers are what make the bus useful.
 - Add your script to the `Examples/` directory  
 - Use a clear name: `telegram_worker.py`, `sms_worker.sh`, etc.  
 - Use either:
-  - **Standard Auth** (cURL / Bash)
+  - **Standard Auth** (CURL / Bash)
   - **Strict Auth** (Python SDK)
 
 **Requirement:**  
