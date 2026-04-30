@@ -156,6 +156,7 @@ The following are NOT considered vulnerabilities:
 For all security-related concerns:
 
 👉 https://dev.to/d_security
+
 👉 https://discord.gg/bzAneAQzGX
 
 ---
