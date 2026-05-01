@@ -46,6 +46,11 @@ bus_logs.txt
 infrastructure.db
 infrastructure.db-wal
 infrastructure.db-shm
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
 
 # =========================
 # Secrets (CRITICAL)
