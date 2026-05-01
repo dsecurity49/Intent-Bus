@@ -1,5 +1,5 @@
 # RFC: Intent Protocol
-## Version 1.0
+## Version 1.1
 
 ### Status
 Draft
@@ -20,6 +20,7 @@ It provides:
 - At-least-once delivery
 - Atomic job claiming
 - Retry and failure handling
+- Hybrid routing (private and public queues)
 - Optional cryptographic request authentication
 
 The protocol is designed to operate without external infrastructure and is suitable for environments ranging from mobile devices to cloud servers.
@@ -46,7 +47,7 @@ A worker claims it, executes it, and marks it complete.
 
 The system guarantees:
 - Jobs are not silently lost
-- Jobs may be retried if execution fails
+- At-least-once execution (a job MAY be executed more than once; workers MUST be idempotent)
 
 ---
 
@@ -133,8 +134,8 @@ Servers MUST:
 
 Servers SHOULD:
 
-- Limit nonce storage to a bounded window
-- Enforce per-key nonce quotas
+- Limit nonce storage to a bounded time window
+- Rely on rate limiting to prevent abuse
 
 ---
 
@@ -167,7 +168,7 @@ BODY
 Example:
 
 ```
-/claim?goal=notify
+/claim?goal=notify&publisher=tenant_a
 ```
 
 ---
@@ -202,7 +203,8 @@ Creates a new intent.
 ```json
 {
   "goal": "string",
-  "payload": {}
+  "payload": {},
+  "visibility": "string"
 }
 ```
 
@@ -210,6 +212,8 @@ Creates a new intent.
 
 - `goal` MUST be a non-empty string
 - `payload` MUST be a JSON object
+- `visibility` MAY be `"private"` or `"public"`
+- If omitted, server MUST default to `"private"`
 
 #### Optional Header
 
@@ -238,15 +242,21 @@ Optional query:
 
 ```
 ?goal=<string>
+?publisher=<string>
 ```
 
 #### Behavior
 
 - MUST atomically select and lock a job
 - MUST increment `claim_attempts`
+- MUST prioritize jobs by `claim_attempts` ascending
 - MUST only return jobs that are:
   - `open`, OR
   - `claimed` but expired
+- MUST only return jobs where:
+  - `visibility` is `"public"`, OR
+  - job belongs to the requesting API key
+- If `publisher` is provided, server MUST validate authorization
 
 #### Responses
 
@@ -370,7 +380,7 @@ The protocol does NOT guarantee:
 ## 11. Implementation Notes
 
 - SQLite is sufficient for single-node deployments
-- Locking SHOULD be transactional (e.g., `BEGIN IMMEDIATE`)
+- Locking SHOULD be transactional and atomic (e.g., `BEGIN IMMEDIATE` with `RETURNING`)
 - Cleanup of expired jobs SHOULD be periodic
 - Systems SHOULD handle database contention gracefully
 
@@ -378,7 +388,7 @@ The protocol does NOT guarantee:
 
 ## 12. Versioning
 
-- Version: 1.0
+- Version: 1.1
 - Breaking changes MUST increment major version
 - Additive changes SHOULD be backward-compatible
 
@@ -390,7 +400,7 @@ An implementation is compliant if it:
 
 - Implements required endpoints
 - Enforces authentication rules
-- Maintains lifecycle guarantees
+- Maintains lifecycle and routing guarantees
 
 ---
 
