@@ -11,66 +11,83 @@
 
 ## Security Model Overview
 
-Intent Bus follows a **Dual-Auth Model** designed to balance usability and security:
+Intent Bus uses a **Dual-Auth Model** to balance simplicity and security.
 
 ### 1. Standard Authentication
 
 - Requires `X-API-KEY` over HTTPS
 - Protects against passive network interception
-- **Limitation:** Does NOT protect against replay attacks if requests are captured
+
+**Limitation:**
+- Requests can be replayed if captured by an active attacker
+
+---
 
 ### 2. Strict Authentication (HMAC)
 
-- Uses:
-  - Timestamp
-  - Nonce
-  - HMAC-SHA256 signature
-- Provides:
-  - Replay protection
-  - Payload integrity
-  - Request authenticity
+Each request includes:
 
-**Recommendation:**  
-Strict Auth SHOULD be used in all production environments.
+- Timestamp
+- Nonce
+- HMAC-SHA256 signature
+
+Provides:
+
+- Replay protection
+- Payload integrity
+- Request authenticity
+
+**Recommendation:** Use Strict Auth in all production environments.
 
 ---
 
 ## Server Operations
 
 ### Admin Dashboard Access
-If the basic web dashboard is enabled in `flask_app.py`, it is protected by HTTP Basic Auth. 
-- **Username:** `admin` (hardcoded)
-- **Password:** Must be set via the `DASHBOARD_PASSWORD` environment variable.
+
+If the optional dashboard is enabled in `flask_app.py`, it is protected via HTTP Basic Auth:
+
+- **Username:** `admin` (fixed)
+- **Password:** Set via `DASHBOARD_PASSWORD` environment variable
+
+---
 
 ### Reverse Proxy & HTTPS
-The server enforces HTTPS in production by checking the `X-Forwarded-Proto` header. If you are deploying behind a custom Nginx/Apache proxy (rather than PythonAnywhere), ensure your proxy is configured to pass this header, or legitimate worker requests will receive a `403 Forbidden`.
+
+The server enforces HTTPS in production using the `X-Forwarded-Proto` header.
+
+If deploying behind Nginx / Apache:
+
+- Ensure this header is forwarded correctly
+- Otherwise, requests may be rejected with `403 Forbidden`
 
 ---
 
 ## Threat Model (High-Level)
 
-Intent Bus is designed to mitigate:
+### Mitigated
 
-- Replay attacks (Strict Auth)
-- Concurrent claim race conditions (transactional locking)
-- Poison-pill job loops (retry limits)
-- Cross-tenant data access (API key scoping)
+- Replay attacks (Strict Auth only)
+- Concurrent claim race conditions (SQLite transactional locking)
+- Infinite retry loops (3-attempt limit)
+- Cross-tenant access (API key isolation)
 
-Intent Bus does NOT attempt to mitigate:
+### Not Mitigated
 
-- Malicious workers executing arbitrary payload logic
+- Malicious or unsafe worker execution
 - Compromised API keys
-- Side-channel or host-level attacks
+- Host-level or VPS compromise
+- Side-channel attacks
 
 ---
 
 ## Reporting a Vulnerability
 
-**Please do not open public GitHub issues for security vulnerabilities.**
+**Do not open public GitHub issues for security vulnerabilities.**
 
-Instead, report privately via:
+Report privately via:
 
-- Dev.to: https://dev.to/d_security
+- **Email:** dsecurity49@gmail.com
 
 ---
 
@@ -78,20 +95,21 @@ Instead, report privately via:
 
 - Clear description of the issue
 - Step-by-step reproduction
-- Proof of concept (if possible)
-- Potential impact
+- Proof of concept (if available)
+- Impact assessment
 
 ---
 
 ### Response Policy
 
-- Acknowledgement: within 48 hours
-- Initial triage: within 3–5 days
-- Fix timeline: depends on severity
+- **Acknowledgement:** within 48 hours  
+- **Initial triage:** within 3–5 days  
+- **Fix timeline:** depends on severity  
 
-Valid reports may result in:
-- Public credit (optional)
-- Patch and disclosure notes
+Valid reports may receive:
+
+- Credit in release notes (optional)
+- Fast-tracked fixes
 
 ---
 
@@ -101,46 +119,51 @@ When using Intent Bus:
 
 - NEVER expose API keys in client-side code
 - ALWAYS use HTTPS
-- USE Strict Auth for production systems
-- AVOID placing sensitive secrets in payloads
+- USE Strict Auth in production
+- AVOID storing sensitive data in payloads
 - ROTATE API keys periodically
 
 ---
 
 ## Known Limitations
 
-### 1. Payload Sensitivity
+### 1. Payload Exposure
 
-Intent payloads are not encrypted at rest.
+- Payloads are **not encrypted at rest**
+- Public intents (`visibility="public"`) can be claimed by any authenticated worker
 
-**Do not store:**
+**Do NOT include:**
+
 - API keys
 - Passwords
-- Secrets
+- PII
+- Secrets of any kind
 
 ---
 
 ### 2. Data Retention
 
 - Intents are ephemeral
-- Expired and fulfilled jobs are pruned
+- Completed and expired jobs are pruned automatically
 - KV store values expire via TTL
 
 ---
 
 ### 3. Concurrency Constraints
 
-- SQLite uses a single-writer model
-- High write contention may lead to:
-  - Increased latency
-  - Temporary request failures
+- SQLite uses a **single-writer model**
+
+Under high load:
+
+- Increased latency may occur
+- Requests may fail temporarily (`503 Database Busy`)
 
 ---
 
 ### 4. Replay Protection Scope
 
-- Only enforced in Strict Auth mode
-- Standard Auth remains replayable by design
+- Enforced **only in Strict Auth**
+- Standard Auth is replayable by design
 
 ---
 
@@ -148,28 +171,29 @@ Intent payloads are not encrypted at rest.
 
 The following are NOT considered vulnerabilities:
 
-- Denial of Service via excessive valid requests (rate limits apply)
+- Denial of Service via valid requests (rate limits apply)
 - Worker-side execution bugs
-- Misuse of API keys by authorized users
-- Expected retry behavior of jobs
+- Unsafe user code (e.g., `eval`)
+- API key misuse by authorized users
+- Expected retry behavior
 
 ---
 
 ## Disclosure Policy
 
-- Fixes will be released before public disclosure
-- Security patches may be shipped silently for critical issues
-- Changelogs will include relevant security notes when appropriate
+- Fixes are released before public disclosure
+- Critical patches may be shipped without prior notice
+- Changelogs include relevant security notes when applicable
 
 ---
 
 ## Contact
 
-For all security-related concerns:
+For security concerns:
 
-👉 https://dev.to/d_security
-
-👉 https://discord.gg/bzAneAQzGX
+- **Email:** dsecurity49@gmail.com  
+- **Discord:** https://discord.gg/bzAneAQzGX  
+  *(DM `dsecurity` for non-sensitive communication)*
 
 ---
 
