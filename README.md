@@ -17,9 +17,10 @@ Built for developers who want something more reliable than cron, without the ove
 - Trigger your **Android phone from a cloud server**
 - Run jobs across devices **without opening ports**
 - Build distributed systems using **just HTTP + curl**
+- **Hybrid Routing:** Keep jobs private, or open them to a global worker fleet
 - No brokers, no queues, no infrastructure
 
-> No Firebase. No message queues. Just a single Flask file.
+> No Firebase. No message queues. Just a minimal Flask + SQLite core.
 
 ---
 
@@ -27,11 +28,9 @@ Built for developers who want something more reliable than cron, without the ove
 
 1. A client **POSTs a job** to `/intent`
 2. Workers **poll `/claim`** for matching jobs
-3. One worker **atomically claims** the job (SQLite lock)
+3. One worker **atomically claims** the job (SQLite transactional locking with `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`)
 4. Worker executes and calls `/fulfill`
 5. If it crashes → job is **automatically retried**
-
----
 
 ```mermaid
 graph LR
@@ -68,31 +67,43 @@ graph LR
 Intent Bus supports two modes:
 
 ### 1. Standard Auth (Simple)
-- Just pass:
+
+Send header:
 
 ```bash
-X-API-KEY: your_key
+X-API-KEY: your_key_here
 ```
 
-- Works with:
-  - curl
-  - bash scripts
-  - IoT devices
+Works with:
+- curl
+- bash scripts
+- IoT devices
 
 ---
 
 ### 2. Strict Auth (Recommended for production)
-- HMAC-SHA256 signed requests
-- Nonce-based replay protection
-- Handled automatically by the Python SDK
+
+- HMAC-SHA256 signed requests  
+- Nonce-based replay protection  
+- Canonical request serialization  
+- Handled automatically by the Python SDK  
 
 ---
 
 ## 🚀 Quickstart (Python SDK - Strict Auth)
 
+[![Python SDK](https://img.shields.io/badge/GitHub-Intent_Bus_SDK-blue?logo=github)](https://github.com/dsecurity49/Intent-Bus-sdk)
+
 ```bash
 pip install intent-bus
 ```
+
+Or, if you want to add the **Official Client SDKs** section at the bottom (right above the "Files" table), use this:
+
+## 📦 Official Client SDKs
+
+- **Python SDK:** github.com/dsecurity49/Intent-Bus-sdk
+- **Node.js / Go:** *(Coming soon)*
 
 ### Publish a job
 
@@ -103,7 +114,8 @@ client = IntentClient(api_key="your_key_here")
 
 job = client.publish(
     goal="send_notification",
-    payload={"message": "Hello from the cloud"}
+    payload={"message": "Hello from the cloud"},
+    # visibility="public"  # Uncomment to allow global fleet workers
 )
 
 print(job["id"])
@@ -115,13 +127,17 @@ print(job["id"])
 from intent_bus import IntentClient
 
 def handler(payload):
-    print("Received:", payload["message"])
+    try:
+        print("Received:", payload["message"])
+        return True
+    except Exception:
+        return False
 
 client = IntentClient(api_key="your_key_here")
-
-# Blocking loop
 client.listen(goal="send_notification", handler=handler)
 ```
+
+> ⚠️ Workers must be idempotent. The system may deliver the same job more than once.
 
 ---
 
@@ -132,7 +148,7 @@ client.listen(goal="send_notification", handler=handler)
 ```bash
 curl -X POST https://dsecurity.pythonanywhere.com/intent \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your_key_here" \
+  -H "X-API-KEY: your_key_here" \
   -d '{"goal":"send_notification","payload":{"message":"Hello"}}'
 ```
 
@@ -141,11 +157,11 @@ curl -X POST https://dsecurity.pythonanywhere.com/intent \
 ```bash
 # Claim
 curl -s -X POST "https://dsecurity.pythonanywhere.com/claim?goal=send_notification" \
-  -H "X-API-Key: your_key_here"
+  -H "X-API-KEY: your_key_here"
 
 # Fulfill
 curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
-  -H "X-API-Key: your_key_here"
+  -H "X-API-KEY: your_key_here"
 ```
 
 > If a job isn’t fulfilled within 60 seconds, it is automatically retried.
@@ -154,22 +170,22 @@ curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
 
 ## 🧩 Example Use Cases
 
-- Trigger a **phone notification** when a scraper finishes
-- Run scripts across multiple machines without hardcoding dependencies
-- Replace cron pipelines with loosely coupled workers
-- Execute remote commands via Termux without exposing ports
+- Trigger a **phone notification** when a scraper finishes  
+- Run scripts across multiple machines without hardcoding dependencies  
+- Replace cron pipelines with loosely coupled workers  
+- Execute remote commands via Termux without exposing ports  
 
 ---
 
 ## ⚡ Features
 
-- **At-Least-Once Delivery** — jobs are retried automatically
-- **Atomic Locking** — SQLite transactions prevent race conditions
-- **Poison Pill Handling** — failed jobs stop after 3 attempts
-- **Goal Routing** — workers filter jobs via `?goal=`
-- **Rate Limiting** — 60 req/min per key + IP
-- **Tester Keys** — isolate external users
-- **Ephemeral KV Store** — `/set` and `/get` endpoints
+- **At-Least-Once Delivery** — jobs are retried automatically  
+- **Atomic Locking** — SQLite transactions prevent race conditions  
+- **Hybrid Routing (Open Fleet)** — intents are private by default, optional public execution  
+- **Poison Pill Handling** — failed jobs stop after 3 attempts  
+- **Rate Limiting** — 60 req/min per API key  
+- **Zero-Ops Cleanup** — background cleanup prevents database bloat  
+- **Ephemeral KV Store** — `/set` and `/get` endpoints  
 
 ---
 
@@ -183,32 +199,55 @@ curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
 
 ## ⚠️ Limitations
 
-- SQLite = **not designed for high concurrency**
-- Best for **low to medium traffic workloads**
-- Not a replacement for Kafka / RabbitMQ at scale
+- SQLite = **single-writer contention** under high load  
+- Best for **low to medium traffic workloads**  
+- Not a replacement for Kafka / RabbitMQ at enterprise scale  
 
 ---
 
 ## 🛠️ Setup
 
-### Server (PythonAnywhere)
+### Server (PythonAnywhere / VPS)
 
-1. Clone the repo  
-2. Set your API key in WSGI:
+⚠️ **Requirement:** SQLite 3.35.0+ is required (for atomic `RETURNING`).
 
-```python
-import os
-os.environ['BUS_SECRET'] = 'your_key_here'
+```bash
+python -c "import sqlite3; print(sqlite3.sqlite_version)"
 ```
 
-3. Deploy `flask_app.py`
+```bash
+git clone https://github.com/dsecurity49/Intent-Bus.git
+cd Intent-Bus
+pip install -r requirements.txt
+```
+
+Set your API key:
+
+```bash
+export BUS_SECRET="your_key_here"
+```
+
+Run the server:
+
+```bash
+python flask_app.py
+```
+
+### Advanced Configuration (Production)
+
+Optional environment variables:
+
+```bash
+BUS_DB_PATH=/path/to/persistent/infrastructure.db
+BUS_DISABLE_INTERNAL_CLEANUP=true  # Disable if running multiple instances to avoid duplicate cleanup threads
+```
 
 ---
 
 ### Worker (Termux / Linux)
 
 ```bash
-pkg install jq curl     # Termux
+pkg install jq curl   # Termux
 sudo apt install jq curl
 ```
 
@@ -229,9 +268,9 @@ https://dsecurity.pythonanywhere.com
 ```
 
 To get a tester key:
-- Dev.to: https://dev.to/d_security
-- GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues
-- Discord: https://discord.gg/bzAneAQzGX
+- Dev.to: https://dev.to/d_security  
+- GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues  
+- Discord: https://discord.gg/bzAneAQzGX  
 
 ---
 
