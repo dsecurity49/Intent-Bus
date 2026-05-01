@@ -2,12 +2,13 @@ import os
 import sqlite3
 import time
 import json
-import uuid
 import secrets
 import logging
 import hashlib
 import hmac
+import threading
 from urllib.parse import urlencode, parse_qsl
+
 from flask import Flask, request, jsonify, g, Response, render_template_string
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -15,10 +16,16 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024
 
+if sqlite3.sqlite_version_info < (3, 35, 0):
+    raise RuntimeError("SQLite 3.35.0+ is required for the /claim RETURNING clause.")
+
 # --- CONFIG ---
 API_KEY = os.environ["BUS_SECRET"]
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
-DB_PATH = os.environ.get("BUS_DB_PATH", os.path.join(os.path.dirname(__file__), "infrastructure.db"))
+DB_PATH = os.environ.get(
+    "BUS_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "infrastructure.db"),
+)
 MAINTENANCE_MODE = os.environ.get("BUS_MAINTENANCE_MODE", "False").lower() == "true"
 
 RATE_LIMIT_WINDOW = 60
@@ -30,18 +37,13 @@ NONCE_RETENTION_SECONDS = NONCE_WINDOW_SECONDS * 2
 FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_PAYLOAD = 5 * 1024
 MAX_TTL = 86400
-MAX_OPEN_INTENTS_PER_KEY = 100
-MAX_NONCES_PER_KEY = 5000  # Mitigation for Nonce DoS
 
 logging.basicConfig(level=logging.INFO)
 
+
 def api_error(code, message, status_code=400):
-    return jsonify({
-        "error": {
-            "code": code,
-            "message": message
-        }
-    }), status_code
+    return jsonify({"error": {"code": code, "message": message}}), status_code
+
 
 ADMIN_HTML = """
 <!DOCTYPE html>
@@ -72,7 +74,6 @@ ADMIN_HTML = """
             <article><h5>Fulfilled</h5><h2 class="status-fulfilled">{{ stats.fulfilled }}</h2></article>
             <article><h5>Failed</h5><h2 class="status-failed">{{ stats.failed }}</h2></article>
         </div>
-
         <article>
             <header><strong>Active Tester Keys</strong></header>
             <table role="grid">
@@ -84,7 +85,6 @@ ADMIN_HTML = """
                 </tbody>
             </table>
         </article>
-
         <article>
             <header><strong>Live Intent Queue (Last 10)</strong></header>
             <table role="grid">
@@ -107,8 +107,10 @@ ADMIN_HTML = """
 </html>
 """
 
+
 def now():
     return time.time()
+
 
 def safe_int(value, default, min_val=None, max_val=None):
     try:
@@ -121,11 +123,14 @@ def safe_int(value, default, min_val=None, max_val=None):
         v = min(max_val, v)
     return v
 
+
 def get_real_ip():
     return request.remote_addr or "unknown"
 
+
 def is_local():
     return request.remote_addr in ("127.0.0.1", "::1")
+
 
 def is_json_safe(obj, max_depth=10, depth=0):
     if depth > max_depth:
@@ -136,10 +141,12 @@ def is_json_safe(obj, max_depth=10, depth=0):
         return all(is_json_safe(v, max_depth, depth + 1) for v in obj)
     return True
 
+
 def dashboard_unauthorized():
     resp = Response("Unauthorized Access Denied.", 401)
     resp.headers["WWW-Authenticate"] = 'Basic realm="Intent Bus Dashboard"'
     return resp
+
 
 def dashboard_auth_ok():
     if not DASHBOARD_PASSWORD:
@@ -147,10 +154,10 @@ def dashboard_auth_ok():
     auth = request.authorization
     if not auth or not isinstance(auth.password, str) or not isinstance(auth.username, str):
         return False
-    # Enforce username for basic auth
     if auth.username != "admin":
         return False
     return hmac.compare_digest(auth.password, DASHBOARD_PASSWORD)
+
 
 def ensure_columns(db, table, columns):
     existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -159,13 +166,19 @@ def ensure_columns(db, table, columns):
         if col_name not in existing:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
 
+
+def is_busy_or_locked(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
+
+
 def get_db():
     if "db" not in g:
         db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL;")
-        db.execute("PRAGMA synchronous=NORMAL;")
         db.execute("PRAGMA busy_timeout=30000;")
+        db.execute("PRAGMA synchronous=NORMAL;")
 
         db.execute("""CREATE TABLE IF NOT EXISTS store (
             key TEXT PRIMARY KEY, value TEXT, expires_at REAL)""")
@@ -174,7 +187,7 @@ def get_db():
             id TEXT PRIMARY KEY, goal TEXT, payload TEXT, status TEXT,
             reward INTEGER, created_at REAL, expires_at REAL, claimed_at REAL,
             claimed_by TEXT, publisher TEXT, claim_attempts INTEGER DEFAULT 0,
-            last_error TEXT, failed_at REAL)""")
+            last_error TEXT, failed_at REAL, visibility TEXT DEFAULT 'private')""")
 
         db.execute("""CREATE TABLE IF NOT EXISTS tester_keys (
             api_key TEXT PRIMARY KEY, owner TEXT,
@@ -191,12 +204,17 @@ def get_db():
             api_key TEXT, nonce TEXT, created_at REAL, PRIMARY KEY (api_key, nonce))""")
 
         ensure_columns(db, "intents", [
-            "publisher TEXT", "claim_attempts INTEGER DEFAULT 0",
-            "last_error TEXT", "failed_at REAL",
+            "publisher TEXT",
+            "claim_attempts INTEGER DEFAULT 0",
+            "last_error TEXT",
+            "failed_at REAL",
+            "visibility TEXT DEFAULT 'private'",
         ])
 
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_goal ON intents(goal)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_publisher ON intents(publisher)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_visibility ON intents(visibility)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_expires ON intents(expires_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claimed_at ON intents(claimed_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_failed_at ON intents(failed_at)")
@@ -207,57 +225,96 @@ def get_db():
         g.db = db
     return g.db
 
+
 @app.teardown_appcontext
 def close_db(e):
     db = g.pop("db", None)
     if db:
         db.close()
 
-last_cleanup = 0
 
-def cleanup():
-    global last_cleanup
-    if now() - last_cleanup < 60:
-        return
-
-    last_cleanup = now()
-    db = get_db()
-
-    try:
-        db.execute("BEGIN")
-
-        db.execute("DELETE FROM store WHERE expires_at < ?", (now(),))
-        db.execute("DELETE FROM intents WHERE expires_at < ?", (now(),))
-        db.execute("DELETE FROM rate_limits WHERE window < ?", (now() - 3600,))
-        db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (now() - 86400,))
-        db.execute("DELETE FROM request_nonces WHERE created_at < ?", (now() - NONCE_RETENTION_SECONDS,))
-
-        db.execute("""
-            UPDATE intents
-            SET status='failed',
-                failed_at=COALESCE(failed_at, ?),
-                last_error=COALESCE(last_error, 'retry limit exceeded')
-            WHERE status='claimed' AND claimed_at < ? AND claim_attempts >= ?
-        """, (now(), now() - CLAIM_TIMEOUT, MAX_CLAIM_ATTEMPTS))
-
-        db.execute("DELETE FROM intents WHERE status='failed' AND failed_at < ?", (now() - FAILED_RETENTION_SECONDS,))
-
-        db.commit()
-    except sqlite3.OperationalError as e:
+def cleanup_loop():
+    """Background daemon thread for garbage collection."""
+    while True:
+        db = None
         try:
-            db.rollback()
-        except Exception:
-            pass
-        if "locked" in str(e).lower():
-            logging.warning("[!] Cleanup skipped: Database locked")
-            return
-        raise
-    except Exception as e:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        logging.error(f"[!] Cleanup encountered unexpected error: {e}")
+            db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
+            db.execute("PRAGMA journal_mode=WAL;")
+            db.execute("PRAGMA busy_timeout=30000;")
+            db.execute("PRAGMA synchronous=NORMAL;")
+
+            cutoff = now()
+            db.execute("BEGIN IMMEDIATE")
+
+            db.execute("DELETE FROM store WHERE expires_at < ?", (cutoff,))
+            db.execute("DELETE FROM intents WHERE expires_at < ?", (cutoff,))
+            db.execute("DELETE FROM rate_limits WHERE window < ?", (cutoff - 3600,))
+            db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (cutoff - 86400,))
+            db.execute("DELETE FROM request_nonces WHERE created_at < ?", (cutoff - NONCE_RETENTION_SECONDS,))
+
+            db.execute("""
+                UPDATE intents
+                SET status='failed',
+                    failed_at=COALESCE(failed_at, ?),
+                    last_error=COALESCE(last_error, 'retry limit exceeded')
+                WHERE status='claimed'
+                  AND claimed_at < ?
+                  AND claim_attempts >= ?
+            """, (cutoff, cutoff - CLAIM_TIMEOUT, MAX_CLAIM_ATTEMPTS))
+
+            db.execute(
+                "DELETE FROM intents WHERE status='failed' AND failed_at < ?",
+                (cutoff - FAILED_RETENTION_SECONDS,),
+            )
+
+            db.commit()
+        except sqlite3.OperationalError as e:
+            if db:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            if not is_busy_or_locked(e):
+                logging.error(f"[!] Background Cleanup OperationalError: {e}")
+        except Exception as e:
+            if db:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logging.error(f"[!] Background Cleanup encountered unexpected error: {e}")
+        finally:
+            if db:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+        time.sleep(60)
+
+
+cleanup_thread_started = False
+cleanup_thread_lock = threading.Lock()
+
+
+def start_cleanup_thread():
+    global cleanup_thread_started
+    with cleanup_thread_lock:
+        if not cleanup_thread_started:
+            threading.Thread(target=cleanup_loop, daemon=True, name="IntentBusCleanup").start()
+            cleanup_thread_started = True
+
+
+def init_db():
+    with app.app_context():
+        get_db()
+
+
+if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
+    init_db()
+    if os.environ.get("BUS_DISABLE_INTERNAL_CLEANUP", "false").lower() != "true":
+        start_cleanup_thread()
+
 
 def get_role(key):
     if not key:
@@ -266,6 +323,7 @@ def get_role(key):
         return "admin"
     row = get_db().execute("SELECT 1 FROM tester_keys WHERE api_key=?", (key,)).fetchone()
     return "tester" if row else None
+
 
 def verify_signed_request(api_key):
     sig = request.headers.get("X-Signature")
@@ -284,9 +342,8 @@ def verify_signed_request(api_key):
         return False, "Stale timestamp"
 
     raw_body = request.get_data(cache=True, as_text=False) or b""
-    
-    # Properly normalize query string to prevent HMAC mismatch
-    parsed = parse_qsl(request.query_string.decode('utf-8'), keep_blank_values=True)
+
+    parsed = parse_qsl(request.query_string.decode("utf-8"), keep_blank_values=True)
     canonical_query = urlencode(sorted(parsed), doseq=True)
     canonical_path = request.path
     if canonical_query:
@@ -297,7 +354,7 @@ def verify_signed_request(api_key):
         canonical_path.encode("utf-8"),
         ts.encode("utf-8"),
         nonce.encode("utf-8"),
-        raw_body
+        raw_body,
     ])
 
     expected = hmac.new(api_key.encode("utf-8"), msg, hashlib.sha256).hexdigest()
@@ -308,13 +365,6 @@ def verify_signed_request(api_key):
     db = get_db()
     try:
         db.execute("BEGIN IMMEDIATE")
-        
-        # Cap nonces per key to prevent DoS
-        nonce_count = db.execute("SELECT COUNT(*) FROM request_nonces WHERE api_key=?", (api_key,)).fetchone()[0]
-        if nonce_count > MAX_NONCES_PER_KEY:
-            db.rollback()
-            return False, "Nonce quota exceeded"
-
         db.execute("INSERT INTO request_nonces VALUES (?,?,?)", (api_key, nonce, now()))
         db.commit()
         return True, None
@@ -331,13 +381,17 @@ def verify_signed_request(api_key):
             pass
         return False, "Database busy"
 
+
 def rate_limited(key):
     db = get_db()
-    identifier = f"{key}:{get_real_ip()}"
+    identifier = key  # tenant-scoped; IP rotation should not bypass quotas
     t = now()
     try:
         db.execute("BEGIN IMMEDIATE")
-        row = db.execute("SELECT count, window FROM rate_limits WHERE identifier=?", (identifier,)).fetchone()
+        row = db.execute(
+            "SELECT count, window FROM rate_limits WHERE identifier=?",
+            (identifier,),
+        ).fetchone()
 
         if not row or t - row["window"] > RATE_LIMIT_WINDOW:
             db.execute("REPLACE INTO rate_limits VALUES (?,1,?)", (identifier, t))
@@ -356,19 +410,16 @@ def rate_limited(key):
             db.rollback()
         except Exception:
             pass
-        # Fail closed on DB lock
         logging.warning(f"[!] Rate limit check failed closed due to DB lock for {identifier}")
         return True
 
+
 @app.before_request
 def security():
-    cleanup()
-
     if MAINTENANCE_MODE:
         return api_error("maintenance", "The bus is currently undergoing maintenance.", 503)
 
-    # Explicit HTTPS check
-    if not is_local() and request.headers.get("X-Forwarded-Proto", "http") != "https":
+    if not is_local() and not request.is_secure:
         return api_error("https_required", "HTTPS is required.", 403)
 
     if request.path in ("/", "/admin/dashboard"):
@@ -385,7 +436,6 @@ def security():
     g.role = role
     g.api_key = key
 
-    # --- DUAL-AUTH MODEL ---
     if request.headers.get("X-Signature"):
         ok, err = verify_signed_request(key)
         if not ok:
@@ -396,8 +446,12 @@ def security():
     if role == "tester":
         if rate_limited(key):
             return api_error("rate_limited", "Too many requests. Back off.", 429)
-        get_db().execute("UPDATE tester_keys SET total_requests=total_requests+1 WHERE api_key=?", (key,))
+        get_db().execute(
+            "UPDATE tester_keys SET total_requests=total_requests+1 WHERE api_key=?",
+            (key,),
+        )
         get_db().commit()
+
 
 @app.after_request
 def headers(r: Response):
@@ -408,9 +462,11 @@ def headers(r: Response):
     r.headers["Referrer-Policy"] = "no-referrer"
     return r
 
+
 @app.route("/")
 def index():
     return "Intent Bus v7.0.1", 200
+
 
 @app.route("/admin/dashboard")
 def admin_dashboard():
@@ -425,71 +481,101 @@ def admin_dashboard():
             (SELECT COUNT(*) FROM intents WHERE status='fulfilled') as fulfilled,
             (SELECT COUNT(*) FROM intents WHERE status='failed') as failed
     """).fetchone()
-    keys = db.execute("SELECT owner, total_requests, created_at FROM tester_keys ORDER BY total_requests DESC").fetchall()
-    intents = db.execute("SELECT id, goal, status, claim_attempts, last_error FROM intents ORDER BY created_at DESC LIMIT 10").fetchall()
+
+    keys = db.execute(
+        "SELECT owner, total_requests, created_at FROM tester_keys ORDER BY total_requests DESC"
+    ).fetchall()
+
+    intents = db.execute(
+        "SELECT id, goal, status, claim_attempts, last_error FROM intents ORDER BY created_at DESC LIMIT 10"
+    ).fetchall()
 
     return render_template_string(ADMIN_HTML, stats=stats, keys=keys, intents=intents)
+
 
 @app.route("/admin/generate_key", methods=["POST"])
 def gen_key():
     if g.role != "admin":
         return api_error("forbidden", "Admin access required.", 403)
+
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
         return api_error("invalid_request", "Request body must be a JSON object.")
 
     owner = data.get("owner", "anon")
     key = "test_" + secrets.token_hex(16)
+
     db = get_db()
     db.execute("INSERT INTO tester_keys VALUES (?,?,0,?)", (key, owner, now()))
     db.commit()
     return jsonify({"api_key": key, "owner": owner})
 
+
 @app.route("/admin/purge", methods=["POST"])
 def purge():
     if g.role != "admin":
         return api_error("forbidden", "Admin access required.", 403)
+
     db = get_db()
     db.execute("DELETE FROM intents")
     db.commit()
     return jsonify({"ok": True})
+
 
 @app.route("/set/<key>", methods=["POST"])
 def set_val(key):
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return api_error("invalid_request", "Request body must be a JSON object.")
+
     val = data.get("value")
     if val is None:
         return api_error("invalid_request", "Missing 'value' field.")
 
     scoped_key = f"{g.api_key}:{key}"
     db = get_db()
-    db.execute("REPLACE INTO store VALUES (?,?,?)", (scoped_key, str(val), now() + safe_int(data.get("ttl"), 600, 1, MAX_TTL)))
+    db.execute(
+        "REPLACE INTO store VALUES (?,?,?)",
+        (scoped_key, str(val), now() + safe_int(data.get("ttl"), 600, 1, MAX_TTL)),
+    )
     db.commit()
     return jsonify({"ok": True})
 
+
 @app.route("/get/<key>")
 def get_val(key):
-    row = get_db().execute("SELECT * FROM store WHERE key=? AND expires_at > ?", (f"{g.api_key}:{key}", now())).fetchone()
+    row = get_db().execute(
+        "SELECT * FROM store WHERE key=? AND expires_at > ?",
+        (f"{g.api_key}:{key}", now()),
+    ).fetchone()
+
     if not row:
         return api_error("not_found", "Key not found or expired.", 404)
+
     return jsonify({"value": row["value"]})
+
 
 @app.route("/intent", methods=["POST"])
 def create_intent():
     idem_key = request.headers.get("Idempotency-Key")
     db = get_db()
     data = request.get_json(silent=True)
+
     if not isinstance(data, dict):
         return api_error("invalid_request", "Request body must be a JSON object.")
 
-    body_hash = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    body_hash = hashlib.sha256(
+        json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
     try:
         db.execute("BEGIN IMMEDIATE")
+
         if idem_key:
-            row = db.execute("SELECT response, status_code, body_hash FROM idempotency_keys WHERE api_key=? AND key=?", (g.api_key, idem_key)).fetchone()
+            row = db.execute(
+                "SELECT response, status_code, body_hash FROM idempotency_keys WHERE api_key=? AND key=?",
+                (g.api_key, idem_key),
+            ).fetchone()
             if row:
                 if row["body_hash"] != body_hash:
                     db.rollback()
@@ -503,12 +589,9 @@ def create_intent():
         if not isinstance(data["goal"], str) or not data["goal"].strip():
             db.rollback()
             return api_error("invalid_request", "Goal must be a non-empty string.")
-            
-        # Strict payload validation
         if not isinstance(data["payload"], dict):
             db.rollback()
             return api_error("invalid_payload", "Payload must be a JSON object/dictionary.")
-            
         if not is_json_safe(data["payload"]):
             db.rollback()
             return api_error("payload_too_deep", "Payload is too deeply nested.")
@@ -518,20 +601,43 @@ def create_intent():
             db.rollback()
             return api_error("payload_too_large", "Payload exceeds size limits.", 413)
 
-        if db.execute("SELECT COUNT(*) FROM intents WHERE status='open' AND publisher=?", (g.api_key,)).fetchone()[0] >= MAX_OPEN_INTENTS_PER_KEY:
+        if db.execute(
+            "SELECT COUNT(*) FROM intents WHERE status='open' AND publisher=?",
+            (g.api_key,),
+        ).fetchone()[0] >= MAX_OPEN_INTENTS_PER_KEY:
             db.rollback()
             return api_error("rate_limited", "Too many open intents for this key.", 429)
 
-        iid = str(uuid.uuid4())[:8]
+        iid = secrets.token_hex(8)
         response_data = {"id": iid, "status": "published"}
-        
+
+        visibility = "public" if data.get("visibility") == "public" else "private"
+
         db.execute("""
-            INSERT INTO intents (id, goal, payload, status, reward, created_at, expires_at, claimed_at, claimed_by, publisher, claim_attempts) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (iid, data["goal"].strip(), payload, "open", safe_int(data.get("reward"), 0, 0), now(), now() + MAX_TTL, 0.0, None, g.api_key, 0))
+            INSERT INTO intents
+            (id, goal, payload, status, reward, created_at, expires_at,
+             claimed_at, claimed_by, publisher, claim_attempts, visibility)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            iid,
+            data["goal"].strip(),
+            payload,
+            "open",
+            safe_int(data.get("reward"), 0, 0),
+            now(),
+            now() + MAX_TTL,
+            0.0,
+            None,
+            g.api_key,
+            0,
+            visibility,
+        ))
 
         if idem_key:
-            db.execute("INSERT INTO idempotency_keys VALUES (?,?,?,?,?,?)", (g.api_key, idem_key, body_hash, json.dumps(response_data), 201, now()))
+            db.execute(
+                "INSERT INTO idempotency_keys VALUES (?,?,?,?,?,?)",
+                (g.api_key, idem_key, body_hash, json.dumps(response_data), 201, now()),
+            )
 
         db.commit()
         return jsonify(response_data), 201
@@ -539,10 +645,20 @@ def create_intent():
     except sqlite3.IntegrityError:
         db.rollback()
         return api_error("conflict", "Concurrent request conflict detected.", 409)
+    except sqlite3.OperationalError as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        if is_busy_or_locked(e):
+            return api_error("database_busy", "Database is busy, please retry.", 503)
+        logging.error(f"Intent creation OperationalError: {e}")
+        return api_error("database_error", "Internal database error during intent creation.", 500)
     except Exception as e:
         db.rollback()
         logging.error(f"Intent creation error: {e}")
         return api_error("internal_error", "An internal error occurred.", 500)
+
 
 @app.route("/claim", methods=["POST"])
 def claim():
@@ -550,39 +666,88 @@ def claim():
     t = now()
     stale = t - CLAIM_TIMEOUT
     target_goal = request.args.get("goal")
+    target_publisher = request.args.get("publisher")
+
+    where_parts = []
+    params = {
+        "now": t,
+        "stale": stale,
+        "max_attempts": MAX_CLAIM_ATTEMPTS,
+        "claimer": g.api_key,
+    }
+
+    if target_goal:
+        where_parts.append("goal=:target_goal")
+        params["target_goal"] = target_goal
+
+    if target_publisher:
+        where_parts.append("publisher=:target_publisher")
+        params["target_publisher"] = target_publisher
+    else:
+        where_parts.append("(publisher=:worker_key OR visibility='public')")
+        params["worker_key"] = g.api_key
+
+    routing_sql = " AND ".join(where_parts)
+
+    query = f"""
+        WITH candidate AS (
+            SELECT id
+            FROM intents
+            WHERE expires_at > :now
+              AND status != 'failed'
+              AND claim_attempts < :max_attempts
+              AND (status='open' OR (status='claimed' AND claimed_at < :stale))
+              AND {routing_sql}
+            ORDER BY claim_attempts ASC, created_at ASC, id ASC
+            LIMIT 1
+        )
+        UPDATE intents
+        SET status='claimed',
+            claimed_at=:now,
+            claimed_by=:claimer,
+            claim_attempts=claim_attempts+1
+        WHERE id = (SELECT id FROM candidate)
+          AND claim_attempts < :max_attempts
+          AND (status='open' OR (status='claimed' AND claimed_at < :stale))
+          AND {routing_sql}
+        RETURNING id, goal, payload, claim_attempts
+    """
 
     try:
         db.execute("BEGIN IMMEDIATE")
-        query = "SELECT * FROM intents WHERE expires_at > ? AND status != 'failed' AND (status='open' OR (status='claimed' AND claimed_at < ?)) AND claim_attempts < ?"
-        params = [t, stale, MAX_CLAIM_ATTEMPTS]
-        
-        if target_goal:
-            query += " AND goal=?"
-            params.append(target_goal)
+        row = db.execute(query, params).fetchone()
 
-        # Claim fairness: ORDER BY created_at ASC
-        row = db.execute(query + " ORDER BY created_at ASC LIMIT 1", params).fetchone()
-        
         if not row:
             db.rollback()
             return "", 204
 
-        updated = db.execute("""
-            UPDATE intents SET status='claimed', claimed_at=?, claimed_by=?, claim_attempts=claim_attempts+1
-            WHERE id=? AND (status='open' OR (status='claimed' AND claimed_at < ?))
-        """, (t, g.api_key, row["id"], stale))
+        db.commit()
+        return jsonify({
+            "id": row["id"],
+            "goal": row["goal"],
+            "payload": json.loads(row["payload"]),
+            "claim_attempts": row["claim_attempts"],
+        }), 200
 
-        if updated.rowcount == 0:
+    except sqlite3.OperationalError as e:
+        try:
             db.rollback()
+        except Exception:
+            pass
+
+        if is_busy_or_locked(e):
             return "", 204
 
-        db.commit()
-        return jsonify({"id": row["id"], "goal": row["goal"], "payload": json.loads(row["payload"]), "claim_attempts": int(row["claim_attempts"]) + 1}), 200
+        logging.error(f"[!] Database OperationalError in /claim: {e}")
+        return api_error("database_error", "Internal database error during claim.", 500)
+    except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logging.error(f"[!] Unexpected error in /claim: {e}")
+        return api_error("internal_error", "An internal error occurred during claim.", 500)
 
-    except sqlite3.OperationalError:
-        try: db.rollback()
-        except: pass
-        return "", 204
 
 @app.route("/fail/<iid>", methods=["POST"])
 def fail(iid):
@@ -593,20 +758,27 @@ def fail(iid):
         WHERE id=? AND status='claimed' AND claimed_by=?
     """, (str(data.get("error", "unknown")).strip()[:500], now(), iid, g.api_key))
     db.commit()
-    
+
     if cur.rowcount == 0:
         return api_error("not_found", "Intent not found or not owned by claimer.", 404)
+
     return jsonify({"ok": True, "id": iid, "status": "failed"}), 200
+
 
 @app.route("/fulfill/<iid>", methods=["POST"])
 def fulfill(iid):
     db = get_db()
-    cur = db.execute("UPDATE intents SET status='fulfilled' WHERE id=? AND status='claimed' AND claimed_by=?", (iid, g.api_key))
+    cur = db.execute(
+        "UPDATE intents SET status='fulfilled' WHERE id=? AND status='claimed' AND claimed_by=?",
+        (iid, g.api_key),
+    )
     db.commit()
-    
+
     if cur.rowcount == 0:
         return api_error("not_found", "Intent not found or not owned by claimer.", 404)
+
     return jsonify({"ok": True, "id": iid}), 200
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
