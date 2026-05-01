@@ -35,6 +35,18 @@ Strict Auth SHOULD be used in all production environments.
 
 ---
 
+## Server Operations
+
+### Admin Dashboard Access
+If the basic web dashboard is enabled in `flask_app.py`, it is protected by HTTP Basic Auth. 
+- **Username:** `admin` (hardcoded)
+- **Password:** Must be set via the `DASHBOARD_PASSWORD` environment variable.
+
+### Reverse Proxy & HTTPS
+The server enforces HTTPS in production by checking the `X-Forwarded-Proto` header. If you are deploying behind a custom Nginx/Apache proxy (rather than PythonAnywhere), ensure your proxy is configured to pass this header, or legitimate worker requests will receive a `403 Forbidden`.
+
+---
+
 ## Threat Model (High-Level)
 
 Intent Bus is designed to mitigate:
