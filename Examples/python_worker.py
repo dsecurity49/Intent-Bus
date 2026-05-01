@@ -3,8 +3,15 @@ import sys
 import argparse
 import subprocess
 import logging
+import time
+import json
 from typing import Dict, List
-from intent_bus import IntentClient
+
+try:
+    from intent_bus import IntentClient
+except ImportError:
+    print("Error: intent-bus SDK not found. Install it with 'pip install intent-bus'")
+    sys.exit(1)
 
 # -------------------------------
 # Configuration
@@ -12,8 +19,9 @@ from intent_bus import IntentClient
 
 DEFAULT_INTERVAL = 5
 MAX_OUTPUT_LENGTH = 1000
+MAX_PAYLOAD_SIZE = 2048  # bytes
+EXECUTION_COOLDOWN = 1   # seconds between executions
 
-# Whitelisted commands (SAFE MODE)
 ALLOWED_COMMANDS: Dict[str, List[str]] = {
     "uptime": ["uptime"],
     "date": ["date"],
@@ -23,7 +31,7 @@ ALLOWED_COMMANDS: Dict[str, List[str]] = {
 }
 
 # -------------------------------
-# Logging Setup
+# Logging
 # -------------------------------
 
 logging.basicConfig(
@@ -33,36 +41,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger("IntentWorker")
 
+last_execution_time = 0
 
 # -------------------------------
 # Helpers
 # -------------------------------
 
 def load_api_key(path: str) -> str:
+    path = os.path.expanduser(path)
+
     if not os.path.exists(path):
         logger.error(f"API key not found at {path}")
         sys.exit(1)
 
     with open(path, "r") as f:
-        return f.read().strip()
+        key = f.read().strip()
+
+    if not key:
+        logger.error("API key file is empty")
+        sys.exit(1)
+
+    return key
+
+
+def sanitize_text(text: str) -> str:
+    """Remove non-printable control characters."""
+    return "".join(c for c in text if c.isprintable())
 
 
 def safe_execute(command: List[str]) -> str:
-    """
-    Executes a whitelisted command safely.
-    """
-    result = subprocess.run(
-        command,
-        shell=False,
-        capture_output=True,
-        text=True,
-        timeout=30
-    )
+    try:
+        result = subprocess.run(
+            command,
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
 
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip())
+        if result.returncode != 0:
+            err = result.stderr.strip() or f"Exit code {result.returncode}"
+            raise RuntimeError(err)
 
-    return result.stdout.strip()[:MAX_OUTPUT_LENGTH]
+        output = sanitize_text(result.stdout.strip())
+        return output[:MAX_OUTPUT_LENGTH]
+
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Command execution timed out (30s)")
+    except Exception as e:
+        raise RuntimeError(f"Internal execution error: {str(e)}")
 
 
 # -------------------------------
@@ -70,32 +97,48 @@ def safe_execute(command: List[str]) -> str:
 # -------------------------------
 
 def handle_sys_command(payload: dict) -> bool:
-    """
-    Safe handler using command whitelist.
-    """
+    global last_execution_time
+
+    # --- Payload validation ---
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be a JSON object")
+
+    if len(json.dumps(payload)) > MAX_PAYLOAD_SIZE:
+        raise ValueError("Payload exceeds maximum safe size")
+
     cmd_key = payload.get("cmd")
 
+    if not isinstance(cmd_key, str):
+        raise ValueError("Payload field 'cmd' must be a string")
+
+    cmd_key = sanitize_text(cmd_key).strip()
+
     if not cmd_key:
-        raise ValueError("Missing 'cmd' in payload")
+        raise ValueError("Payload field 'cmd' is empty")
 
     if cmd_key not in ALLOWED_COMMANDS:
         raise ValueError(f"Command '{cmd_key}' is not allowed")
 
+    # --- Smooth rate limiting (prevents retry storms) ---
+    now = time.time()
+    elapsed = now - last_execution_time
+
+    if elapsed < EXECUTION_COOLDOWN:
+        time.sleep(EXECUTION_COOLDOWN - elapsed)
+
     command = ALLOWED_COMMANDS[cmd_key]
+    logger.info(f"EXECUTE | CMD: {cmd_key}")
 
-    logger.info({
-        "event": "execute",
-        "command": command
-    })
+    try:
+        output = safe_execute(command)
+        logger.info(f"SUCCESS | OUT: {output}")
 
-    output = safe_execute(command)
+        last_execution_time = time.time()
+        return True
 
-    logger.info({
-        "event": "success",
-        "output": output
-    })
-
-    return True
+    except Exception as e:
+        logger.error(f"FAILURE | ERR: {str(e)}")
+        raise  # SDK handles /fail
 
 
 # -------------------------------
@@ -106,14 +149,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Intent Bus Production Worker (Strict Auth)"
     )
-    parser.add_argument("--goal", default="sys", help="Goal to listen for")
+    parser.add_argument("--goal", default="sys", help="Goal to poll for")
     parser.add_argument("--url", default="https://dsecurity.pythonanywhere.com")
     parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
     parser.add_argument("--key-path", default="~/.apikey")
+
     args = parser.parse_args()
 
-    api_key_path = os.path.expanduser(args.key_path)
-    api_key = load_api_key(api_key_path)
+    api_key = load_api_key(args.key_path)
 
     client = IntentClient(
         base_url=args.url,
@@ -121,24 +164,23 @@ def main():
     )
 
     logger.info("===================================")
-    logger.info("INTENT BUS WORKER STARTED")
-    logger.info(f"Mode         : SAFE (whitelisted commands)")
+    logger.info("DSECURITY // INTENT BUS WORKER READY")
+    logger.info("Mode         : SAFE (Hardened)")
     logger.info(f"Goal         : {args.goal}")
     logger.info(f"Server       : {args.url}")
     logger.info(f"Poll Interval: {args.interval}s")
     logger.info("===================================")
 
     try:
-        # FIXED: Changed 'interval' to 'poll_interval' to match SDK signature
         client.listen(
             goal=args.goal,
             handler=handle_sys_command,
-            poll_interval=args.interval 
+            poll_interval=args.interval
         )
     except KeyboardInterrupt:
-        logger.info("Shutdown requested by user")
+        logger.info("Shutdown requested via SIGINT")
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.error(f"FATAL SDK ERROR: {e}")
         sys.exit(1)
 
 
