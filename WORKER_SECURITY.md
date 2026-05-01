@@ -20,7 +20,8 @@ Workers operate in a **hostile-by-default environment**:
 - Payloads MAY be malformed or malicious  
 - API keys MAY be leaked or misused  
 - External endpoints MAY be attacker-controlled  
-- Workers MAY run on sensitive systems (phones, servers)
+- Workers MAY run on sensitive systems (phones, servers)  
+- **Open Fleet:** Public intents (`visibility="public"`) originate from untrusted third parties  
 
 Therefore:
 
@@ -34,7 +35,7 @@ Therefore:
 Workers SHOULD:
 - Run with minimal OS permissions
 - Avoid root access unless strictly required
-- Limit filesystem and network access
+- Restrict filesystem and network access
 
 ---
 
@@ -42,7 +43,7 @@ Workers SHOULD:
 Workers MUST:
 - Validate all incoming payload fields
 - Reject incomplete or malformed data
-- Avoid implicit assumptions about payload structure
+- Avoid assumptions about payload structure
 
 ---
 
@@ -65,22 +66,25 @@ Workers MUST validate:
 - Payload MUST be valid JSON before parsing
 
 ### Type Safety
-- Fields MUST match expected types (string, object, etc.)
+- Fields MUST match expected types
+
+Workers SHOULD:
+- Enforce maximum payload size limits
 
 ---
 
 ## 4. Execution Safety
 
-### 4.1 Command Execution (Critical)
+### 4.1 Command Execution (CRITICAL)
 
 Workers MUST NOT:
 
 - Execute raw payload input directly
-- Use `shell=True` or equivalent with untrusted input
+- Use `shell=True`, `eval`, or equivalent with untrusted input
 
 Workers SHOULD:
 
-- Use **whitelists** for allowed commands
+- Use strict allowlists for permitted actions
 - Use argument arrays instead of shell strings
 
 #### ✅ Safe Example
@@ -100,32 +104,33 @@ eval "$USER_INPUT"
 
 Workers SHOULD:
 - Limit output size
-- Sanitize logs if needed
+- Sanitize logs where necessary
 - Prevent memory exhaustion
 
 ---
 
 ## 5. External Network Calls
 
-### 5.1 URL Validation (Critical)
+### 5.1 URL Validation (CRITICAL)
 
 Workers MUST validate outbound URLs.
 
 #### Allowed:
-- Explicitly whitelisted domains
+- Explicitly allowlisted domains
 
 #### Forbidden:
 - Arbitrary user-provided URLs
-- Internal network targets (e.g., `localhost`, `127.0.0.1`)
+- Internal network targets (`localhost`, `127.0.0.1`, `169.254.0.0/16`, etc.)
 
 ---
 
 ### 5.2 SSRF Protection
 
 Workers MUST:
-- Restrict protocols (`https://` only)
+- Restrict protocols (`https://` only unless explicitly required)
 - Validate domain patterns
-- Reject IP-based URLs unless explicitly allowed
+- Resolve and verify IPs before connecting (prevent DNS rebinding)
+- Reject private/internal IP ranges
 
 ---
 
@@ -135,23 +140,25 @@ Workers MUST:
 
 - Store API keys securely (e.g., `~/.apikey`)
 - NEVER log API keys
-- NEVER expose keys in error messages
+- NEVER expose keys in errors or responses
 
 Workers SHOULD:
-- Use Strict Auth (HMAC) in production
+- Use Strict Auth (HMAC) in production environments
+- Rotate API keys periodically
 
 ---
 
-## 7. Error Handling
+## 7. Lifecycle & Error Handling
 
 Workers MUST:
 
+- Call `/fulfill/<id>` upon successful execution
 - Call `/fail/<id>` on execution failure
-- Provide a meaningful error message
+- Provide a meaningful error message when failing
 - Avoid silent failures
 
 Workers SHOULD:
-- Avoid leaking sensitive internal details in errors
+- Avoid leaking sensitive internal details in error messages
 
 ---
 
@@ -159,8 +166,8 @@ Workers SHOULD:
 
 Workers SHOULD:
 
-- Implement sleep intervals between requests
-- Increase delay on repeated failures
+- Implement delay between polling requests
+- Use exponential backoff on repeated failures
 - Avoid tight retry loops
 
 ---
@@ -173,20 +180,23 @@ Workers SHOULD enforce:
 - Output size limits
 - Memory-safe operations
 
+Workers MAY:
+- Use OS-level limits (ulimit, cgroups, containers)
+
 ---
 
 ## 10. Logging Guidelines
 
-Workers SHOULD:
+Workers SHOULD log:
 
-- Log:
-  - Job ID
-  - Execution status
-  - Errors
+- Job ID
+- Execution status
+- Errors
 
 Workers MUST NOT:
-- Log secrets (API keys, tokens)
-- Log sensitive payloads without filtering
+
+- Log API keys or secrets
+- Log sensitive payloads without sanitization
 
 ---
 
@@ -196,7 +206,7 @@ Workers MUST NOT:
 
 - Whitelisted actions only
 - Restricted external calls
-- Suitable for public/shared environments
+- Suitable for public/shared environments and Open Fleet usage
 
 ---
 
@@ -204,12 +214,13 @@ Workers MUST NOT:
 
 - May execute arbitrary commands
 - MUST be used only:
-  - With trusted API keys
+  - With trusted, private intents
   - In isolated environments (VM/container)
 
 Workers operating in Power Mode MUST clearly document:
 
-> ⚠️ This worker executes arbitrary commands and is not safe for untrusted environments.
+> ⚠️ **CRITICAL:** This worker executes arbitrary commands.  
+> It MUST NEVER be used to claim public intents (`visibility="public"`).
 
 ---
 
@@ -221,6 +232,8 @@ A worker is considered **compliant** if it:
 - [ ] Does NOT execute raw input
 - [ ] Uses safe command execution
 - [ ] Validates outbound URLs
+- [ ] Implements SSRF protections
+- [ ] Handles success via `/fulfill`
 - [ ] Handles errors via `/fail`
 - [ ] Implements retry/backoff
 - [ ] Avoids logging secrets
@@ -241,6 +254,7 @@ This standard does NOT guarantee:
 ## 14. Future Improvements
 
 Planned areas:
+
 - Worker sandboxing guidelines
 - Signed worker packages
 - Capability-based permission model
@@ -255,8 +269,8 @@ Security is not optional.
 
 > A single unsafe worker can compromise an entire environment.
 
-Follow this standard to ensure:
-- Safe automation
+Following this standard ensures:
+- Safer automation
 - Predictable behavior
 - Production readiness
 
