@@ -72,13 +72,7 @@ def safe_execute(command: List[str]) -> str:
 def handle_sys_command(payload: dict) -> bool:
     """
     Safe handler using command whitelist.
-
-    Expected payload:
-    {
-        "cmd": "uptime"
-    }
     """
-
     cmd_key = payload.get("cmd")
 
     if not cmd_key:
@@ -122,23 +116,24 @@ def main():
     api_key = load_api_key(api_key_path)
 
     client = IntentClient(
-        api_key=api_key,
-        base_url=args.url
+        base_url=args.url,
+        api_key=api_key
     )
 
     logger.info("===================================")
     logger.info("INTENT BUS WORKER STARTED")
-    logger.info(f"Mode        : SAFE (whitelisted commands)")
-    logger.info(f"Goal        : {args.goal}")
-    logger.info(f"Server      : {args.url}")
+    logger.info(f"Mode         : SAFE (whitelisted commands)")
+    logger.info(f"Goal         : {args.goal}")
+    logger.info(f"Server       : {args.url}")
     logger.info(f"Poll Interval: {args.interval}s")
     logger.info("===================================")
 
     try:
+        # FIXED: Changed 'interval' to 'poll_interval' to match SDK signature
         client.listen(
             goal=args.goal,
             handler=handle_sys_command,
-            interval=args.interval
+            poll_interval=args.interval 
         )
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
