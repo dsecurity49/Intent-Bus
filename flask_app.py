@@ -37,6 +37,7 @@ NONCE_RETENTION_SECONDS = NONCE_WINDOW_SECONDS * 2
 FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_PAYLOAD = 5 * 1024
 MAX_TTL = 86400
+MAX_OPEN_INTENTS_PER_KEY = 100
 
 logging.basicConfig(level=logging.INFO)
 
@@ -218,6 +219,7 @@ def get_db():
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_expires ON intents(expires_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claimed_at ON intents(claimed_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_intents_failed_at ON intents(failed_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claim_priority ON intents(claim_attempts, created_at, id)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_store_expires ON store(expires_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)")
         db.execute("CREATE INDEX IF NOT EXISTS idx_request_nonces_created ON request_nonces(created_at)")
@@ -249,7 +251,7 @@ def cleanup_loop():
             db.execute("DELETE FROM store WHERE expires_at < ?", (cutoff,))
             db.execute("DELETE FROM intents WHERE expires_at < ?", (cutoff,))
             db.execute("DELETE FROM rate_limits WHERE window < ?", (cutoff - 3600,))
-            db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (cutoff - 86400,))
+            db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (cutoff - 3600,))
             db.execute("DELETE FROM request_nonces WHERE created_at < ?", (cutoff - NONCE_RETENTION_SECONDS,))
 
             db.execute("""
@@ -525,6 +527,8 @@ def purge():
 @app.route("/set/<key>", methods=["POST"])
 def set_val(key):
     data = request.get_json(silent=True)
+    if data is None:
+        return api_error("invalid_json", "Malformed JSON body.", 400)
     if not isinstance(data, dict):
         return api_error("invalid_request", "Request body must be a JSON object.")
 
@@ -561,6 +565,8 @@ def create_intent():
     db = get_db()
     data = request.get_json(silent=True)
 
+    if data is None:
+        return api_error("invalid_json", "Malformed JSON body.", 400)
     if not isinstance(data, dict):
         return api_error("invalid_request", "Request body must be a JSON object.")
 
@@ -608,7 +614,7 @@ def create_intent():
             db.rollback()
             return api_error("rate_limited", "Too many open intents for this key.", 429)
 
-        iid = secrets.token_hex(8)
+        iid = secrets.token_hex(16)
         response_data = {"id": iid, "status": "published"}
 
         visibility = "public" if data.get("visibility") == "public" else "private"
@@ -668,6 +674,10 @@ def claim():
     target_goal = request.args.get("goal")
     target_publisher = request.args.get("publisher")
 
+    # Restrict explicit publisher targeting to the owner or admin.
+    if target_publisher and target_publisher != g.api_key and g.role != "admin":
+        return api_error("forbidden", "publisher filtering is restricted.", 403)
+
     where_parts = []
     params = {
         "now": t,
@@ -709,7 +719,6 @@ def claim():
         WHERE id = (SELECT id FROM candidate)
           AND claim_attempts < :max_attempts
           AND (status='open' OR (status='claimed' AND claimed_at < :stale))
-          AND {routing_sql}
         RETURNING id, goal, payload, claim_attempts
     """
 
