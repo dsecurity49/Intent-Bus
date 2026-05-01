@@ -30,7 +30,7 @@ Built for developers who want something more reliable than cron, without the ove
 2. Workers **poll `/claim`** for matching jobs
 3. One worker **atomically claims** the job (SQLite transactional locking with `BEGIN IMMEDIATE` + `UPDATE ... RETURNING`)
 4. Worker executes and calls `/fulfill`
-5. If it crashes → job is **automatically retried**
+5. If it crashes → job is **retried automatically**
 
 ```mermaid
 graph LR
@@ -98,11 +98,9 @@ Works with:
 pip install intent-bus
 ```
 
-Or, if you want to add the **Official Client SDKs** section at the bottom (right above the "Files" table), use this:
-
 ## 📦 Official Client SDKs
 
-- **Python SDK:** github.com/dsecurity49/Intent-Bus-sdk
+- **Python SDK:** [github.com/dsecurity49/Intent-Bus-sdk](https://github.com/dsecurity49/Intent-Bus-sdk)
 - **Node.js / Go:** *(Coming soon)*
 
 ### Publish a job
@@ -115,7 +113,7 @@ client = IntentClient(api_key="your_key_here")
 job = client.publish(
     goal="send_notification",
     payload={"message": "Hello from the cloud"},
-    # visibility="public"  # Uncomment to allow global fleet workers
+    # visibility="public"  # Allow global workers if needed
 )
 
 print(job["id"])
@@ -137,7 +135,7 @@ client = IntentClient(api_key="your_key_here")
 client.listen(goal="send_notification", handler=handler)
 ```
 
-> ⚠️ Workers must be idempotent. The system may deliver the same job more than once.
+> ⚠️ Workers must be idempotent. The same job may be delivered again during retries.
 
 ---
 
@@ -164,7 +162,7 @@ curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
   -H "X-API-KEY: your_key_here"
 ```
 
-> If a job isn’t fulfilled within 60 seconds, it is automatically retried.
+> If a job isn’t fulfilled within 60 seconds, it is retried.
 
 ---
 
@@ -179,12 +177,12 @@ curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
 
 ## ⚡ Features
 
-- **At-Least-Once Delivery** — jobs are retried automatically  
-- **Atomic Locking** — SQLite transactions prevent race conditions  
-- **Hybrid Routing (Open Fleet)** — intents are private by default, optional public execution  
+- **Reliable Delivery** — jobs are retried automatically  
+- **Atomic Locking** — SQLite prevents race conditions  
+- **Hybrid Routing (Open Fleet)** — private by default, optional public execution  
 - **Poison Pill Handling** — failed jobs stop after 3 attempts  
 - **Rate Limiting** — 60 req/min per API key  
-- **Zero-Ops Cleanup** — background cleanup prevents database bloat  
+- **Zero-Ops Cleanup** — background cleanup prevents DB bloat  
 - **Ephemeral KV Store** — `/set` and `/get` endpoints  
 
 ---
@@ -201,7 +199,7 @@ curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
 
 - SQLite = **single-writer contention** under high load  
 - Best for **low to medium traffic workloads**  
-- Not a replacement for Kafka / RabbitMQ at enterprise scale  
+- Not a replacement for Kafka / RabbitMQ at scale  
 
 ---
 
@@ -235,11 +233,9 @@ python flask_app.py
 
 ### Advanced Configuration (Production)
 
-Optional environment variables:
-
 ```bash
 BUS_DB_PATH=/path/to/persistent/infrastructure.db
-BUS_DISABLE_INTERNAL_CLEANUP=true  # Disable if running multiple instances to avoid duplicate cleanup threads
+BUS_DISABLE_INTERNAL_CLEANUP=true
 ```
 
 ---
@@ -260,8 +256,6 @@ chmod +x worker.sh
 ---
 
 ## 🌍 Try It Live
-
-Public instance:
 
 ```
 https://dsecurity.pythonanywhere.com
