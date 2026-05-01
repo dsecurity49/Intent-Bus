@@ -7,6 +7,8 @@ Each example shows how to:
 - Execute a task locally
 - Fulfill or fail the job
 
+> Workers are part of the protocol — not just clients. Incorrect worker behavior can break system guarantees.
+
 ---
 
 ## 🛠️ Prerequisites
@@ -56,7 +58,7 @@ pip install intent-bus
 
 ### Available
 
-- `python_worker.py` → Executes controlled system commands
+- `python_worker.py` → Demonstrates controlled execution with strict validation (safe command patterns)
 
 ---
 
@@ -77,15 +79,26 @@ python python_worker.py --goal sys
 
 ---
 
-## ⚠️ Notes
+## ⚠️ Notes & Rules
 
-- Workers MUST call `/fulfill/<id>` on success
-- Workers SHOULD call `/fail/<id>` on errors
-- Jobs may be retried (at-least-once delivery)
+- **Completion is mandatory:** Workers MUST call `/fulfill/<id>` on success.
+- **Failure reporting is mandatory:** Workers MUST call `/fail/<id>` on any execution error.
+- Silent drops are considered protocol violations.
 
-See:
-- `SPEC.md` → Protocol definition  
-- `WORKER_SECURITY.md` → Security rules  
+- **Idempotency:** Jobs may be retried (at-least-once delivery). Execution logic MUST be safe to run multiple times.
+
+- **Hybrid Routing:** By default, workers claim private intents. You may modify these examples to claim `visibility="public"` intents.
+
+⚠️ **Security Warning (Open Fleet):**  
+If a worker claims public intents, payloads MUST be treated as untrusted input.  
+Refer to `WORKER_SECURITY.md` before enabling public execution.
+
+---
+
+## 📚 Required Reading
+
+- `SPEC.md` → Protocol definition and state machine  
+- `WORKER_SECURITY.md` → Critical security rules for executing payloads  
 
 ---
 
