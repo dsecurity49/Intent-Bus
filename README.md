@@ -7,11 +7,11 @@
 
 A zero-infrastructure job coordination system with retries, locking, and cross-device workers. Built for developers who want something more reliable than cron, without the overhead of Redis, RabbitMQ, or Firebase.
 
-📖 [Read the full story](https://dev.to/d_security/how-i-control-my-android-phone-from-a-cloud-server-using-100-lines-of-flask-2fl6)
+ [Read the full story](https://dev.to/d_security/how-i-control-my-android-phone-from-a-cloud-server-using-100-lines-of-flask-2fl6)
 
 ----
 
-## 🔥 What makes this different?
+##  What makes this different?
 
 - Trigger your **Android phone from a cloud server**
 - Run jobs across devices **without opening ports**
@@ -23,7 +23,7 @@ No Firebase. No message queues. Just a minimal Flask + SQLite core.
 
 ---
 
-## 🧠 How it works (30 seconds)
+##  How it works (30 seconds)
 
 1. A client **POSTs a job** to `/intent`
 2. Workers **poll `/claim`** for matching jobs
@@ -52,7 +52,7 @@ graph LR
 
 ---
 
-## 👥 Who is this for?
+##  Who is this for?
 
 - Developers running scripts across multiple machines
 - People using **Termux / Android automation**
@@ -87,7 +87,7 @@ Works with:
 
 ---
 
-## 🚀 Quickstart (Python SDK - Strict Auth)
+##  Quickstart (Python SDK - Strict Auth)
 
 [Python SDK](https://github.com/dsecurity49/Intent-Bus-sdk)
 
@@ -95,7 +95,7 @@ Works with:
 pip install intent-bus
 ```
 
-## 📦 Official Client SDKs
+##  Official Client SDKs
 
 - **Python SDK:** [github.com/dsecurity49/Intent-Bus-sdk](https://github.com/dsecurity49/Intent-Bus-sdk)
 - **Node.js / Go:** *(Coming soon)*
@@ -135,7 +135,7 @@ client.listen(goal="send_notification", handler=handler)
 
 > ⚠️ Workers must be idempotent. The same job may be delivered again during retries.
 
-## ⚙️ Quickstart (CURL / Bash - Standard Auth)
+## Quickstart (CURL / Bash - Standard Auth)
 
 ### 1. Publish a job
 
@@ -162,7 +162,7 @@ If a job isn’t fulfilled within 60 seconds, it is retried.
 
 ---
 
-## 🧩 Example Use Cases
+##  Example Use Cases
 
 - Trigger a **phone notification** when a scraper finishes
 - Run scripts across multiple machines without hardcoding dependencies
@@ -171,7 +171,7 @@ If a job isn’t fulfilled within 60 seconds, it is retried.
 
 ---
 
-## ⚡ Features
+##  Features
 
 - **Reliable Delivery** — jobs are retried automatically
 - **Atomic Locking** — SQLite prevents race conditions
@@ -183,7 +183,7 @@ If a job isn’t fulfilled within 60 seconds, it is retried.
 
 ---
 
-## 🏗️ Architecture Guarantees
+##  Architecture Guarantees
 
 - Jobs are **never silently lost**
 - Only one worker can claim a job at a time
@@ -199,7 +199,7 @@ If a job isn’t fulfilled within 60 seconds, it is retried.
 
 ---
 
-## 🛠️ Setup
+##  Setup
 
 ### Server (PythonAnywhere / VPS)
 
@@ -249,7 +249,7 @@ chmod +x worker.sh
 
 ---
 
-## 🌍 Try It Live
+##  Try It Live
 
 ```text
 https://dsecurity.pythonanywhere.com
@@ -262,7 +262,7 @@ To get a tester key:
 
 ---
 
-## 💡 Why I built this
+##  Why I built this
 
 I wanted to trigger scripts on my Android phone from a cloud server
 without Firebase, open ports, or complex infrastructure.
@@ -273,7 +273,7 @@ It worked — and became this project.
 
 ---
 
-## 📁 Files
+##  Files
 
 | File | Purpose |
 |------|--------|
@@ -284,6 +284,6 @@ It worked — and became this project.
 | `SPEC.md` | Protocol spec |
 
 ----
-## 📜 License
+##  License
 
 MIT
