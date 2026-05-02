@@ -6,7 +6,6 @@ import secrets
 import logging
 import hashlib
 import hmac
-import threading
 from urllib.parse import urlencode, parse_qsl
 
 from flask import Flask, request, jsonify, g, Response, render_template_string
@@ -38,6 +37,10 @@ FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_PAYLOAD = 5 * 1024
 MAX_TTL = 86400
 MAX_OPEN_INTENTS_PER_KEY = 100
+
+# --- LAZY CLEANUP CONFIG ---
+CLEANUP_INTERVAL_SECONDS = 600  # 10 minutes
+last_cleanup_time = time.time()
 
 logging.basicConfig(level=logging.INFO)
 
@@ -173,6 +176,52 @@ def is_busy_or_locked(exc: Exception) -> bool:
     return "locked" in msg or "busy" in msg
 
 
+def setup_schema(db):
+    """Run DDL statements only once during app startup."""
+    db.execute("""CREATE TABLE IF NOT EXISTS store (
+        key TEXT PRIMARY KEY, value TEXT, expires_at REAL)""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS intents (
+        id TEXT PRIMARY KEY, goal TEXT, payload TEXT, status TEXT,
+        reward INTEGER, created_at REAL, expires_at REAL, claimed_at REAL,
+        claimed_by TEXT, publisher TEXT, claim_attempts INTEGER DEFAULT 0,
+        last_error TEXT, failed_at REAL, visibility TEXT DEFAULT 'private')""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS tester_keys (
+        api_key TEXT PRIMARY KEY, owner TEXT,
+        total_requests INTEGER DEFAULT 0, created_at REAL)""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS rate_limits (
+        identifier TEXT PRIMARY KEY, count INTEGER, window REAL)""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS idempotency_keys (
+        api_key TEXT, key TEXT, body_hash TEXT, response TEXT,
+        status_code INTEGER, created_at REAL, PRIMARY KEY (api_key, key))""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS request_nonces (
+        api_key TEXT, nonce TEXT, created_at REAL, PRIMARY KEY (api_key, nonce))""")
+
+    ensure_columns(db, "intents", [
+        "publisher TEXT",
+        "claim_attempts INTEGER DEFAULT 0",
+        "last_error TEXT",
+        "failed_at REAL",
+        "visibility TEXT DEFAULT 'private'",
+    ])
+
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_goal ON intents(goal)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_publisher ON intents(publisher)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_visibility ON intents(visibility)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_expires ON intents(expires_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claimed_at ON intents(claimed_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_failed_at ON intents(failed_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claim_priority ON intents(claim_attempts, created_at, id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_store_expires ON store(expires_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_request_nonces_created ON request_nonces(created_at)")
+
+
 def get_db():
     if "db" not in g:
         db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
@@ -180,50 +229,6 @@ def get_db():
         db.execute("PRAGMA journal_mode=WAL;")
         db.execute("PRAGMA busy_timeout=30000;")
         db.execute("PRAGMA synchronous=NORMAL;")
-
-        db.execute("""CREATE TABLE IF NOT EXISTS store (
-            key TEXT PRIMARY KEY, value TEXT, expires_at REAL)""")
-
-        db.execute("""CREATE TABLE IF NOT EXISTS intents (
-            id TEXT PRIMARY KEY, goal TEXT, payload TEXT, status TEXT,
-            reward INTEGER, created_at REAL, expires_at REAL, claimed_at REAL,
-            claimed_by TEXT, publisher TEXT, claim_attempts INTEGER DEFAULT 0,
-            last_error TEXT, failed_at REAL, visibility TEXT DEFAULT 'private')""")
-
-        db.execute("""CREATE TABLE IF NOT EXISTS tester_keys (
-            api_key TEXT PRIMARY KEY, owner TEXT,
-            total_requests INTEGER DEFAULT 0, created_at REAL)""")
-
-        db.execute("""CREATE TABLE IF NOT EXISTS rate_limits (
-            identifier TEXT PRIMARY KEY, count INTEGER, window REAL)""")
-
-        db.execute("""CREATE TABLE IF NOT EXISTS idempotency_keys (
-            api_key TEXT, key TEXT, body_hash TEXT, response TEXT,
-            status_code INTEGER, created_at REAL, PRIMARY KEY (api_key, key))""")
-
-        db.execute("""CREATE TABLE IF NOT EXISTS request_nonces (
-            api_key TEXT, nonce TEXT, created_at REAL, PRIMARY KEY (api_key, nonce))""")
-
-        ensure_columns(db, "intents", [
-            "publisher TEXT",
-            "claim_attempts INTEGER DEFAULT 0",
-            "last_error TEXT",
-            "failed_at REAL",
-            "visibility TEXT DEFAULT 'private'",
-        ])
-
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_goal ON intents(goal)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_publisher ON intents(publisher)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_visibility ON intents(visibility)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_expires ON intents(expires_at)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claimed_at ON intents(claimed_at)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_failed_at ON intents(failed_at)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_intents_claim_priority ON intents(claim_attempts, created_at, id)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_store_expires ON store(expires_at)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)")
-        db.execute("CREATE INDEX IF NOT EXISTS idx_request_nonces_created ON request_nonces(created_at)")
-
         g.db = db
     return g.db
 
@@ -235,87 +240,53 @@ def close_db(e):
         db.close()
 
 
-def cleanup_loop():
-    """Background daemon thread for garbage collection."""
-    while True:
-        db = None
+def run_sync_cleanup():
+    """Runs garbage collection synchronously on the active thread."""
+    db = get_db()
+    cutoff = now()
+    
+    try:
+        db.execute("BEGIN IMMEDIATE")
+
+        db.execute("DELETE FROM store WHERE expires_at < ?", (cutoff,))
+        db.execute("DELETE FROM intents WHERE expires_at < ?", (cutoff,))
+        db.execute("DELETE FROM rate_limits WHERE window < ?", (cutoff - 3600,))
+        db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (cutoff - 3600,))
+        db.execute("DELETE FROM request_nonces WHERE created_at < ?", (cutoff - NONCE_RETENTION_SECONDS,))
+
+        db.execute("""
+            UPDATE intents
+            SET status='failed',
+                failed_at=COALESCE(failed_at, ?),
+                last_error=COALESCE(last_error, 'retry limit exceeded')
+            WHERE status='claimed'
+              AND claimed_at < ?
+              AND claim_attempts >= ?
+        """, (cutoff, cutoff - CLAIM_TIMEOUT, MAX_CLAIM_ATTEMPTS))
+
+        db.execute(
+            "DELETE FROM intents WHERE status='failed' AND failed_at < ?",
+            (cutoff - FAILED_RETENTION_SECONDS,),
+        )
+
+        db.commit()
+    except sqlite3.OperationalError as e:
         try:
-            db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
-            db.execute("PRAGMA journal_mode=WAL;")
-            db.execute("PRAGMA busy_timeout=30000;")
-            db.execute("PRAGMA synchronous=NORMAL;")
-
-            cutoff = now()
-            db.execute("BEGIN IMMEDIATE")
-
-            db.execute("DELETE FROM store WHERE expires_at < ?", (cutoff,))
-            db.execute("DELETE FROM intents WHERE expires_at < ?", (cutoff,))
-            db.execute("DELETE FROM rate_limits WHERE window < ?", (cutoff - 3600,))
-            db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (cutoff - 3600,))
-            db.execute("DELETE FROM request_nonces WHERE created_at < ?", (cutoff - NONCE_RETENTION_SECONDS,))
-
-            db.execute("""
-                UPDATE intents
-                SET status='failed',
-                    failed_at=COALESCE(failed_at, ?),
-                    last_error=COALESCE(last_error, 'retry limit exceeded')
-                WHERE status='claimed'
-                  AND claimed_at < ?
-                  AND claim_attempts >= ?
-            """, (cutoff, cutoff - CLAIM_TIMEOUT, MAX_CLAIM_ATTEMPTS))
-
-            db.execute(
-                "DELETE FROM intents WHERE status='failed' AND failed_at < ?",
-                (cutoff - FAILED_RETENTION_SECONDS,),
-            )
-
-            db.commit()
-        except sqlite3.OperationalError as e:
-            if db:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-            if not is_busy_or_locked(e):
-                logging.error(f"[!] Background Cleanup OperationalError: {e}")
-        except Exception as e:
-            if db:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
-            logging.error(f"[!] Background Cleanup encountered unexpected error: {e}")
-        finally:
-            if db:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-
-        time.sleep(60)
-
-
-cleanup_thread_started = False
-cleanup_thread_lock = threading.Lock()
-
-
-def start_cleanup_thread():
-    global cleanup_thread_started
-    with cleanup_thread_lock:
-        if not cleanup_thread_started:
-            threading.Thread(target=cleanup_loop, daemon=True, name="IntentBusCleanup").start()
-            cleanup_thread_started = True
+            db.rollback()
+        except Exception:
+            pass
+        if not is_busy_or_locked(e):
+            logging.error(f"[!] Lazy Cleanup DB Error: {e}")
 
 
 def init_db():
     with app.app_context():
-        get_db()
+        db = get_db()
+        setup_schema(db)
 
 
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
     init_db()
-    if os.environ.get("BUS_DISABLE_INTERNAL_CLEANUP", "false").lower() != "true":
-        start_cleanup_thread()
 
 
 def get_role(key):
@@ -418,6 +389,14 @@ def rate_limited(key):
 
 @app.before_request
 def security():
+    # 1. LAZY CLEANUP TRIGGER
+    global last_cleanup_time
+    current_time = now()
+    if current_time - last_cleanup_time > CLEANUP_INTERVAL_SECONDS:
+        last_cleanup_time = current_time
+        run_sync_cleanup()
+
+    # 2. SECURITY CHECKS
     if MAINTENANCE_MODE:
         return api_error("maintenance", "The bus is currently undergoing maintenance.", 503)
 
@@ -674,7 +653,6 @@ def claim():
     target_goal = request.args.get("goal")
     target_publisher = request.args.get("publisher")
 
-    # Restrict explicit publisher targeting to the owner or admin.
     if target_publisher and target_publisher != g.api_key and g.role != "admin":
         return api_error("forbidden", "publisher filtering is restricted.", 403)
 
