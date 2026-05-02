@@ -9,6 +9,8 @@ A zero-infrastructure job coordination system with retries, locking, and cross-d
 
 📖 [Read the full story](https://dev.to/d_security/how-i-control-my-android-phone-from-a-cloud-server-using-100-lines-of-flask-2fl6)
 
+----
+
 ## 🔥 What makes this different?
 
 - Trigger your **Android phone from a cloud server**
@@ -18,6 +20,8 @@ A zero-infrastructure job coordination system with retries, locking, and cross-d
 - No brokers, no queues, no infrastructure
 
 No Firebase. No message queues. Just a minimal Flask + SQLite core.
+
+---
 
 ## 🧠 How it works (30 seconds)
 
@@ -34,6 +38,8 @@ graph LR
     C -->|execute task| D[📱 Phone / System Action]
 ```
 
+---
+
 ## 🤔 Why not just use X?
 
 | Tool | Problem |
@@ -44,12 +50,16 @@ graph LR
 | **Firebase** | Vendor lock-in, SDK bloat, pricing |
 | **Intent Bus** | ✅ Single file, deploy anywhere |
 
+---
+
 ## 👥 Who is this for?
 
 - Developers running scripts across multiple machines
 - People using **Termux / Android automation**
 - Indie hackers avoiding infrastructure complexity
 - Anyone who wants job queues without Redis/RabbitMQ
+
+---
 
 ## 🔐 Authentication (Dual-Auth Model)
 
@@ -74,6 +84,8 @@ Works with:
 - Nonce-based replay protection
 - Canonical request serialization
 - Handled automatically by the Python SDK
+
+---
 
 ## 🚀 Quickstart (Python SDK - Strict Auth)
 
@@ -148,12 +160,16 @@ curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
 
 If a job isn’t fulfilled within 60 seconds, it is retried.
 
+---
+
 ## 🧩 Example Use Cases
 
 - Trigger a **phone notification** when a scraper finishes
 - Run scripts across multiple machines without hardcoding dependencies
 - Replace cron pipelines with loosely coupled workers
 - Execute remote commands via Termux without exposing ports
+
+---
 
 ## ⚡ Features
 
@@ -165,17 +181,23 @@ If a job isn’t fulfilled within 60 seconds, it is retried.
 - **Zero-Ops Cleanup** — synchronous lazy-evaluation prevents DB bloat
 - **Ephemeral KV Store** — `/set` and `/get` endpoints
 
+---
+
 ## 🏗️ Architecture Guarantees
 
 - Jobs are **never silently lost**
 - Only one worker can claim a job at a time
 - Workers can crash safely without breaking the system
 
+---
+
 ## ⚠️ Limitations
 
 - SQLite = **single-writer contention** under high load
 - Best for **low to medium traffic workloads**
 - Not a replacement for Kafka / RabbitMQ at scale
+
+---
 
 ## 🛠️ Setup
 
@@ -225,6 +247,8 @@ chmod +x worker.sh
 ./worker.sh
 ```
 
+---
+
 ## 🌍 Try It Live
 
 ```text
@@ -236,6 +260,8 @@ To get a tester key:
 - GitHub Issues: https://github.com/dsecurity49/Intent-Bus/issues
 - Discord: https://discord.gg/bzAneAQzGX
 
+---
+
 ## 💡 Why I built this
 
 I wanted to trigger scripts on my Android phone from a cloud server
@@ -244,6 +270,8 @@ without Firebase, open ports, or complex infrastructure.
 So I built a tiny job bus using Flask + SQLite.
 
 It worked — and became this project.
+
+---
 
 ## 📁 Files
 
@@ -255,6 +283,7 @@ It worked — and became this project.
 | `Examples/` | Sample workers |
 | `SPEC.md` | Protocol spec |
 
+----
 ## 📜 License
 
 MIT
