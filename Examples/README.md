@@ -11,7 +11,7 @@ Each example shows how to:
 
 ---
 
-## 🛠️ Prerequisites
+##  Prerequisites
 
 Store your API key locally:
 
@@ -21,7 +21,7 @@ echo "your_api_key_here" > ~/.apikey
 
 ---
 
-## 🐚 Bash Workers (`.sh`)
+##  Bash Workers (`.sh`)
 
 **Auth Mode:** Standard (API Key Header)  
 **Dependencies:** `curl`, `jq`
@@ -46,7 +46,7 @@ sudo apt install curl jq
 
 ---
 
-## 🐍 Python Workers (`.py`)
+##  Python Workers (`.py`)
 
 **Auth Mode:** Strict (HMAC via SDK)
 
@@ -62,7 +62,7 @@ pip install intent-bus
 
 ---
 
-## 🚀 Running an Example
+##  Running an Example
 
 ### Bash
 
@@ -95,7 +95,7 @@ Refer to `WORKER_SECURITY.md` before enabling public execution.
 
 ---
 
-## 📚 Required Reading
+##  Required Reading
 
 - `SPEC.md` → Protocol definition and state machine  
 - `WORKER_SECURITY.md` → Critical security rules for executing payloads  
