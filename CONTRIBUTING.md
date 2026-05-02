@@ -5,7 +5,7 @@ Intent Bus grows through community ideas, diverse workers, and protocol improvem
 
 ---
 
-## ⚖️ Philosophy
+##  Philosophy
 
 Intent Bus is built on three core principles:
 
@@ -49,7 +49,7 @@ We will:
 
 ---
 
-## 🛠️ Ways to Contribute
+##  Ways to Contribute
 
 ### 1. Build a Worker (Best First Contribution)
 Workers are what make the bus useful. 
@@ -76,7 +76,7 @@ Want Intent Bus in Go, Rust, or TypeScript? Use the protocol spec (`SPEC.md`) as
 
 ---
 
-## 🧪 Development Setup
+##  Development Setup
 
 **Requirement:** SQLite 3.35.0+ is required (for the atomic `RETURNING` clause). 
 Check your version with:
@@ -110,7 +110,7 @@ The server will boot at: `http://localhost:5000`
 
 ---
 
-## 🔍 Testing Guidelines
+##  Testing Guidelines
 
 Before submitting a Pull Request, verify your changes against the core protocol loops:
 
@@ -142,7 +142,7 @@ Verify:
 
 ---
 
-## 📌 Pull Request Rules
+##  Pull Request Rules
 
 * **Focus:** One feature or fix per PR. Keep diffs small.
 * **Style:** Follow PEP-8. Keep it clean and release-grade.
@@ -151,7 +151,7 @@ Verify:
 
 ---
 
-## 🔄 Versioning & Compatibility
+##  Versioning & Compatibility
 
 API changes MUST be backward compatible. If a breaking change is completely unavoidable:
 * It MUST be optional/opt-in where possible.
@@ -161,7 +161,7 @@ API changes MUST be backward compatible. If a breaking change is completely unav
 
 ---
 
-## 💬 Discussions & Help
+##  Discussions & Help
 
 For large architectural ideas or protocol changes, please open an Issue first to hash out the design.
 
@@ -170,6 +170,6 @@ For large architectural ideas or protocol changes, please open an Issue first to
 
 ---
 
-## 📜 License
+##  License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
