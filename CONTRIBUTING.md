@@ -132,7 +132,7 @@ curl -X POST "http://localhost:5000/claim?goal=test" \
 Run multiple workers simultaneously and verify:
 * No duplicate claims for the same intent.
 * Lock contention (`SQLITE_BUSY`) degrades gracefully.
-* Background cleanup does not deadlock the main thread.
+* Synchronous garbage collection does not trigger SQLITE_BUSY timeouts.
 
 **4. Security Checks**
 Verify:
