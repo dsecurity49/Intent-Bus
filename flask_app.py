@@ -6,7 +6,7 @@ import secrets
 import logging
 import hashlib
 import hmac
-from urllib.parse import urlencode, parse_qsl
+from urllib.parse import urlencode, parse_qsl, quote
 
 from flask import Flask, request, jsonify, g, Response, render_template_string
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -317,7 +317,7 @@ def verify_signed_request(api_key):
     raw_body = request.get_data(cache=True, as_text=False) or b""
 
     parsed = parse_qsl(request.query_string.decode("utf-8"), keep_blank_values=True)
-    canonical_query = urlencode(sorted(parsed), doseq=True)
+    canonical_query = urlencode(sorted(parsed), doseq=True, quote_via=quote)
     canonical_path = request.path
     if canonical_query:
         canonical_path += "?" + canonical_query
