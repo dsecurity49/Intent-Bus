@@ -1,0 +1,15 @@
+services:
+  intent-bus:
+    build: .
+    container_name: intent-bus
+    ports:
+      - "8080:8080"
+    environment:
+      - BUS_SECRET=change_this_to_a_secure_key
+      - DASHBOARD_PASSWORD=change_this_to_a_secure_password
+      - BUS_MAINTENANCE_MODE=False
+    volumes:
+      # Persists the SQLite database in a local folder called 'bus_data'
+      # The database survives container restarts and rebuilds
+      - ./bus_data:/app/data
+    restart: unless-stopped
