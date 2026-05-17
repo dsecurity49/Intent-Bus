@@ -35,6 +35,24 @@ if [ -z "$API_KEY" ]; then
   exit 1
 fi
 
+report_status() {
+  local endpoint="$1" id="$2" payload="$3"
+  local attempt=0 max=3 delay=2
+  while [ $attempt -lt $max ]; do
+    if curl -s --max-time 10 -X POST "$BASE_URL/$endpoint/$id" \
+      -H "X-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "$payload" >/dev/null; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    [ $attempt -lt $max ] && sleep $delay
+    delay=$((delay * 2))
+  done
+  echo "[!] Failed to report $endpoint for $id after $max attempts"
+  return 1
+}
+
 echo "Intent Bus Worker started"
 echo "Listening: $NAMESPACE/$GOAL"
 
@@ -92,17 +110,11 @@ while true; do
 
   # --- Execute Action ---
   if timeout 5 termux-notification --title "Intent Bus" --content "$MSG"; then
-    curl -s --max-time 10 -X POST "$BASE_URL/fulfill/$ID" \
-      -H "X-API-KEY: $API_KEY" \
-      -H "Content-Type: application/json" \
-      -d '{"result":"delivered","result_type":"text"}' >/dev/null
+    report_status "fulfill" "$ID" '{"result":"delivered","result_type":"text"}'
     echo "   -> fulfilled"
     ERROR_BACKOFF=5
   else
-    curl -s --max-time 10 -X POST "$BASE_URL/fail/$ID" \
-      -H "X-API-KEY: $API_KEY" \
-      -H "Content-Type: application/json" \
-      -d '{"error":"Notification failed"}' >/dev/null
+    report_status "fail" "$ID" '{"error":"Notification failed"}'
     echo "   -> failed"
     sleep "$ERROR_BACKOFF"
   fi

@@ -33,6 +33,24 @@ API_KEY=$(cat "$API_KEY_FILE")
 
 touch "$LOG_FILE" || { echo "[!] Cannot write log file"; exit 1; }
 
+report_status() {
+  local endpoint="$1" id="$2" payload="$3"
+  local attempt=0 max=3 delay=2
+  while [ $attempt -lt $max ]; do
+    if curl -sS --max-time 10 -X POST "$BASE_URL/$endpoint/$id" \
+      -H "X-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "$payload" >/dev/null; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    [ $attempt -lt $max ] && sleep $delay
+    delay=$((delay * 2))
+  done
+  echo "[!] Failed to report $endpoint for $id after $max attempts"
+  return 1
+}
+
 echo "Intent Bus Logging Worker v7.5 started"
 echo "Logging to: $LOG_FILE"
 
@@ -97,19 +115,11 @@ while true; do
   LOG_LINE="[$TIMESTAMP] ID: $ID | DATA: $PAYLOAD"
 
   if printf "%s\n" "$LOG_LINE" >> "$LOG_FILE"; then
-    curl -sS --max-time 10 -X POST "$BASE_URL/fulfill/$ID" \
-      -H "X-API-KEY: $API_KEY" \
-      -H "Content-Type: application/json" \
-      -d '{"result":"logged","result_type":"text"}' >/dev/null
-
+    report_status "fulfill" "$ID" '{"result":"logged","result_type":"text"}'
     echo "[$(date +%T)] Logged job $ID"
     ERROR_BACKOFF=5
   else
-    curl -sS --max-time 10 -X POST "$BASE_URL/fail/$ID" \
-      -H "X-API-KEY: $API_KEY" \
-      -H "Content-Type: application/json" \
-      -d '{"error":"Failed to write log file"}' >/dev/null
-
+    report_status "fail" "$ID" '{"error":"Failed to write log file"}'
     echo "[!] Failed log for $ID"
     sleep "$ERROR_BACKOFF"
   fi

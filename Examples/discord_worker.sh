@@ -67,25 +67,33 @@ log() {
   echo "[$(date +%T)] $*"
 }
 
+report_status() {
+  local endpoint="$1" id="$2" payload="$3"
+  local attempt=0 max=3 delay=2
+  while [ $attempt -lt $max ]; do
+    if curl -s --max-time "$CURL_TIMEOUT" -X POST "$BASE_URL/$endpoint/$id" \
+      -H "X-API-KEY: $API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "$payload" >/dev/null; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    [ $attempt -lt $max ] && sleep $delay
+    delay=$((delay * 2))
+  done
+  log "[!] Failed to report $endpoint for $id after $max attempts"
+  return 1
+}
+
 fail_intent() {
   local id="$1"
   local reason="$2"
-  curl -s --max-time "$CURL_TIMEOUT" \
-    -X POST "$BASE_URL/fail/$id" \
-    -H "X-API-KEY: $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg r "$reason" '{error: $r}')" >/dev/null \
-    || log "[!] Failed to report fail for $id"
+  report_status "fail" "$id" "$(jq -n --arg r "$reason" '{error: $r}')"
 }
 
 fulfill_intent() {
   local id="$1"
-  curl -s --max-time "$CURL_TIMEOUT" \
-    -X POST "$BASE_URL/fulfill/$id" \
-    -H "X-API-KEY: $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{"result":"delivered","result_type":"text"}' >/dev/null \
-    || log "[!] Failed to report fulfill for $id"
+  report_status "fulfill" "$id" '{"result":"delivered","result_type":"text"}'
 }
 
 # =========================================================
