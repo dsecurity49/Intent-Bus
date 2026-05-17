@@ -31,7 +31,8 @@ chmod 600 "$API_KEY_FILE"
 API_KEY=$(cat "$API_KEY_FILE")
 [ -z "$API_KEY" ] && { echo "[!] API key is empty"; exit 1; }
 
-touch "$LOG_FILE" || { echo "[!] Cannot write log file"; exit 1; }
+install -m 600 /dev/null "$LOG_FILE" 2>/dev/null || touch "$LOG_FILE"
+chmod 600 "$LOG_FILE" || { echo "[!] Cannot secure log file permissions"; exit 1; }
 
 echo "Intent Bus Logging Worker v7.5 started"
 echo "Logging to: $LOG_FILE"
