@@ -27,6 +27,16 @@ if [ ! -f "$API_KEY_FILE" ]; then
   exit 1
 fi
 
+if [ -L "$API_KEY_FILE" ]; then
+  echo "[!] API key file is a symlink -- refusing to read"
+  exit 1
+fi
+
+if [ "$(stat -c %u "$API_KEY_FILE")" != "$(id -u)" ]; then
+  echo "[!] API key file not owned by current user"
+  exit 1
+fi
+
 chmod 600 "$API_KEY_FILE"
 API_KEY=$(cat "$API_KEY_FILE")
 [ -z "$API_KEY" ] && { echo "[!] API key is empty"; exit 1; }
