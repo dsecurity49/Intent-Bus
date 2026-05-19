@@ -3,7 +3,7 @@
 # Last Updated: 2026-05-17
 
 Flask==3.0.2
-Werkzeug==3.0.1
+Werkzeug==3.1.8
 
 # Gunicorn is configured for 1 worker and 4 threads to respect SQLite's single-writer WAL architecture.
 gunicorn==21.2.0
