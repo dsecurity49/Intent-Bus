@@ -1,8 +1,8 @@
-#!/bin/sh
+#!/bin/bash
 set -uo pipefail
 
 # Intent Bus | Simple Logging Worker v7.61
-# Portable logging worker for Intent Bus
+# Bash-based logging worker for Intent Bus
 
 API_KEY_FILE="${HOME}/.apikey"
 BASE_URL="${BASE_URL:-https://dsecurity.pythonanywhere.com}"

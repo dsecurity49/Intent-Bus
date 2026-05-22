@@ -162,7 +162,9 @@ def test_claim_token_required(client):
         },
     )
 
-    assert fulfill_res.status_code in (400, 403)
+    assert fulfill_res.status_code == 400
+    assert fulfill_res.json["error"]["code"] == "invalid_request"
+    assert "Missing claim_token" in fulfill_res.json["error"]["message"]
 
 
 def test_invalid_claim_token_rejected(client):

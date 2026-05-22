@@ -251,7 +251,8 @@ def metrics_auth_ok():
     auth_header = request.headers.get("Authorization", "").strip()
     if auth_header.startswith("Bearer "):
         token = auth_header[7:].strip()
-        return bool(METRICS_TOKEN) and hmac.compare_digest(token, METRICS_TOKEN)
+        if bool(METRICS_TOKEN) and hmac.compare_digest(token, METRICS_TOKEN):
+            return True
     return admin_auth_ok()
 
 
@@ -1464,7 +1465,7 @@ def fail(iid):
                    claim_attempts, max_attempts, backoff_base
             FROM intents
             WHERE id = ? AND claimed_by = ? AND claim_token = ? AND status = 'claimed'
-              AND COALESCE(claim_expires_at, claimed_at + ?) > (? - 2)
+              AND COALESCE(claim_expires_at, claimed_at + ?) > ?
         """, (iid, g.api_key, claim_token, DEFAULT_CLAIM_TIMEOUT, now())).fetchone()
 
         if not row:
@@ -1569,7 +1570,7 @@ def fulfill(iid):
             SELECT id
             FROM intents
             WHERE id = ? AND claimed_by = ? AND claim_token = ? AND status = 'claimed'
-              AND COALESCE(claim_expires_at, claimed_at + ?) > (? - 2)
+              AND COALESCE(claim_expires_at, claimed_at + ?) > ?
         """, (iid, g.api_key, claim_token, DEFAULT_CLAIM_TIMEOUT, now())).fetchone()
 
         if not row:

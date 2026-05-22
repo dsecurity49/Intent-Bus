@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Intent Bus | Discord Webhook Worker (v7.61)
 # Example worker that relays messages to Discord webhooks.

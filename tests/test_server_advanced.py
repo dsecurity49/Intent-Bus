@@ -282,6 +282,9 @@ def test_dead_letters_and_backoff(mock_now, client):
 
     token2 = claim2.json["claim_token"]
 
+    # Ensure tokens are unique between attempts
+    assert token1 != token2
+
     fail2 = client.post(
         f"/fail/{iid}",
         headers=headers,
@@ -348,3 +351,102 @@ def test_admin_isolation(client):
 
     assert hacker_res.status_code == 401
     assert "Authentication required" in hacker_res.text
+
+
+# =================================================================
+# 6. CROSS-ATTEMPT TOKEN ISOLATION TEST
+# =================================================================
+
+@patch("flask_app.now")
+def test_cross_attempt_token_isolation(mock_now, client):
+    current_time = time.time()
+    mock_now.return_value = current_time
+
+    headers = {"X-API-KEY": TEST_API_KEY}
+
+    # Step 1: Publish an intent
+    pub_res = client.post(
+        "/intent",
+        headers=headers,
+        json={
+            "goal": "retry_task",
+            "payload": {"data": "test"},
+        },
+    )
+
+    assert pub_res.status_code == 201
+    iid = pub_res.json["id"]
+
+    # Step 2: Claim it once and save token1
+    claim1_res = client.post(
+        "/claim?goal=retry_task",
+        headers=headers,
+    )
+
+    assert claim1_res.status_code == 200
+    assert claim1_res.json["id"] == iid
+    token1 = claim1_res.json["claim_token"]
+
+    # Step 3: Fail it to return to queue
+    fail_res = client.post(
+        f"/fail/{iid}",
+        headers=headers,
+        json={
+            "claim_token": token1,
+            "error": "temporary failure",
+        },
+    )
+
+    assert fail_res.status_code == 200
+
+    # Advance mocked time beyond retry backoff
+    current_time += 100
+    mock_now.return_value = current_time
+
+    # Step 4: Claim it again and save token2
+    claim2_res = client.post(
+        "/claim?goal=retry_task",
+        headers=headers,
+    )
+
+    assert claim2_res.status_code == 200
+    assert claim2_res.json["id"] == iid
+    token2 = claim2_res.json["claim_token"]
+
+    assert token1 != token2
+
+    # Step 5: Attempt to fulfill using token1 (should fail with 404)
+    fulfill_old_token_res = client.post(
+        f"/fulfill/{iid}",
+        headers=headers,
+        json={
+            "claim_token": token1,
+            "result": "completed with old token",
+            "result_type": "text",
+        },
+    )
+
+    assert fulfill_old_token_res.status_code == 404
+    assert "not found" in fulfill_old_token_res.json["error"]["message"].lower()
+
+    # Step 6: Fulfill using token2 (should succeed)
+    fulfill_res = client.post(
+        f"/fulfill/{iid}",
+        headers=headers,
+        json={
+            "claim_token": token2,
+            "result": "completed with valid token",
+            "result_type": "text",
+        },
+    )
+
+    assert fulfill_res.status_code == 200
+
+    # Verify the intent is fulfilled
+    status_res = client.get(
+        f"/status/{iid}",
+        headers=headers,
+    )
+
+    assert status_res.status_code == 200
+    assert status_res.json["status"] == "fulfilled"
