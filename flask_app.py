@@ -27,6 +27,8 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024
 
 # --- Structured JSON Logging Setup ---
+
+
 class JSONFormatter(logging.Formatter):
     ALLOWED_EXTRA = {
         "status_code", "duration_ms", "intent_id", "worker_id", "remote_addr",
@@ -52,11 +54,11 @@ class JSONFormatter(logging.Formatter):
 
             if record.exc_info:
                 log_record["exception"] = self.formatException(record.exc_info)
-                
+
             for key in self.ALLOWED_EXTRA:
                 if key in record.__dict__:
                     log_record[key] = record.__dict__[key]
-                    
+
             return json.dumps(log_record, default=str)
         except Exception as e:
             return json.dumps({
@@ -65,6 +67,7 @@ class JSONFormatter(logging.Formatter):
                 "message": "Logging failure",
                 "logger_error": str(e)
             })
+
 
 app.logger.setLevel(logging.INFO)
 app.logger.handlers.clear()
@@ -137,11 +140,14 @@ cleanup_lock = threading.Lock()
 # HELPERS
 # =========================================================
 
+
 def now():
     return time.time()
 
+
 def api_error(code, message, status_code=400):
     return jsonify({"error": {"code": code, "message": message}}), status_code
+
 
 def safe_int(value, default, min_val=None, max_val=None):
     try:
@@ -154,6 +160,7 @@ def safe_int(value, default, min_val=None, max_val=None):
         v = min(max_val, v)
     return v
 
+
 def safe_float(value, default, min_val=None, max_val=None):
     try:
         v = float(value)
@@ -165,18 +172,22 @@ def safe_float(value, default, min_val=None, max_val=None):
         v = min(max_val, v)
     return v
 
+
 def get_real_ip():
     ip = request.remote_addr or "unknown"
     if ip.startswith("::ffff:"):
         ip = ip[7:]
     return ip
 
+
 def is_local():
     ip = get_real_ip()
     return ip in ("127.0.0.1", "::1", "localhost")
 
+
 def is_busy_or_locked(exc):
     return "locked" in str(exc).lower() or "busy" in str(exc).lower()
+
 
 def is_json_safe(obj, max_depth=10, depth=0):
     if depth > max_depth:
@@ -187,15 +198,19 @@ def is_json_safe(obj, max_depth=10, depth=0):
         return all(is_json_safe(v, max_depth, depth + 1) for v in obj)
     return True
 
+
 def valid_namespace(ns: str) -> bool:
     return bool(re.match(r"^[a-zA-Z0-9_.-]{1,64}$", ns))
+
 
 def valid_label(value: str) -> bool:
     return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value))
 
+
 def strict_quote(s, safe='', encoding=None, errors=None):
     """Enforces strict RFC 3986 percent-encoding for HMAC canonicalization."""
     return quote(s, safe='', encoding=encoding or 'utf-8', errors=errors or 'strict')
+
 
 def admin_auth_ok():
     token = request.headers.get("X-Admin-Token")
@@ -215,6 +230,7 @@ def admin_auth_ok():
 
     return False
 
+
 def require_admin():
     if admin_auth_ok():
         return None
@@ -226,11 +242,13 @@ def require_admin():
     response.headers["WWW-Authenticate"] = 'Basic realm="IntentBus Admin"'
     return response
 
+
 def metrics_auth_ok():
     bearer = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if bearer:
         return bool(METRICS_TOKEN) and hmac.compare_digest(bearer, METRICS_TOKEN)
     return admin_auth_ok()
+
 
 def maybe_cleanup():
     global last_cleanup_time, last_cleanup_error_time
@@ -267,6 +285,7 @@ def maybe_cleanup():
 # DATABASE ENGINE
 # =========================================================
 
+
 def get_db():
     if "db" not in g:
         db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
@@ -278,6 +297,7 @@ def get_db():
         g.db = db
     return g.db
 
+
 @app.teardown_appcontext
 def close_db(e):
     db = g.pop("db", None)
@@ -288,9 +308,10 @@ def close_db(e):
             pass
         db.close()
 
+
 def ensure_columns(db, table, columns):
     allowed_tables = {
-        "store", "intents", "tester_keys", "rate_limits", 
+        "store", "intents", "tester_keys", "rate_limits",
         "idempotency_keys", "request_nonces", "dead_letters"
     }
     if table not in allowed_tables:
@@ -301,6 +322,7 @@ def ensure_columns(db, table, columns):
         col_name = col_def.split()[0]
         if col_name not in existing:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+
 
 def setup_schema(db):
     db.execute("""
@@ -458,6 +480,7 @@ def setup_schema(db):
     db.execute("CREATE INDEX IF NOT EXISTS idx_request_nonces_created ON request_nonces(created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_dead_letters_created ON dead_letters(created_at)")
 
+
 def init_db():
     with app.app_context():
         setup_schema(get_db())
@@ -466,6 +489,7 @@ def init_db():
 # AUTH & SECURITY
 # =========================================================
 
+
 def get_role(key):
     if not key:
         return None
@@ -473,6 +497,7 @@ def get_role(key):
         return "admin"
     row = get_db().execute("SELECT 1 FROM tester_keys WHERE api_key=?", (key,)).fetchone()
     return "tester" if row else None
+
 
 def verify_signed_request(api_key):
     sig = request.headers.get("X-Signature")
@@ -536,6 +561,7 @@ def verify_signed_request(api_key):
 # CLEANUP
 # =========================================================
 
+
 def archive_dead_letter(db, row, reason):
     db.execute("""
         INSERT OR REPLACE INTO dead_letters (
@@ -553,6 +579,7 @@ def archive_dead_letter(db, row, reason):
         reason,
         now(),
     ))
+
 
 def run_cleanup_once():
     db = None
@@ -659,7 +686,7 @@ def run_cleanup_once():
         stats["dead_letters_deleted"] = cur.rowcount
 
         db.commit()
-        
+
         # Emit cleanup telemetry
         app.logger.info("cleanup_complete", extra=stats)
         return True, stats
@@ -692,6 +719,7 @@ def run_cleanup_once():
 # REQUEST LIFECYCLE
 # =========================================================
 
+
 @app.before_request
 def security():
     # Defensive trace ID sanitization
@@ -701,7 +729,7 @@ def security():
             g.request_id = req_id
         else:
             g.request_id = uuid.uuid4().hex
-            
+
     g.request_start = time.perf_counter()
 
     if request.path in ("/", "/health"):
@@ -771,6 +799,7 @@ def security():
                 pass
             return api_error("internal_error", "An internal error occurred.", 500)
 
+
 @app.after_request
 def log_response(response):
     start_time = getattr(g, "request_start", None)
@@ -783,7 +812,7 @@ def log_response(response):
             "duration_ms": duration_ms,
         },
     )
-    
+
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -795,9 +824,11 @@ def log_response(response):
 # ROOT / HEALTH
 # =========================================================
 
+
 @app.route("/")
 def index():
     return "Intent Bus V7.61", 200
+
 
 @app.route("/health")
 def health():
@@ -806,6 +837,7 @@ def health():
 # =========================================================
 # DASHBOARD
 # =========================================================
+
 
 DASHBOARD_HTML = """
 {% autoescape true %}
@@ -901,6 +933,7 @@ DASHBOARD_HTML = """
 {% endautoescape %}
 """
 
+
 @app.route("/admin/dashboard")
 def admin_dashboard():
     denied = require_admin()
@@ -959,6 +992,7 @@ def admin_dashboard():
 # METRICS
 # =========================================================
 
+
 @app.route("/metrics")
 def metrics():
     db = get_db()
@@ -992,6 +1026,7 @@ def metrics():
 # =========================================================
 # KV STORE
 # =========================================================
+
 
 @app.route("/set/<key>", methods=["POST"])
 def set_value(key):
@@ -1028,6 +1063,7 @@ def set_value(key):
 
     return jsonify({"ok": True})
 
+
 @app.route("/get/<key>")
 def get_value(key):
     row = get_db().execute(
@@ -1041,6 +1077,7 @@ def get_value(key):
 # =========================================================
 # INTENT CREATION
 # =========================================================
+
 
 @app.route("/intent", methods=["POST"])
 def create_intent():
@@ -1181,6 +1218,7 @@ def create_intent():
 # CLAIM
 # =========================================================
 
+
 @app.route("/claim", methods=["POST"])
 def claim():
     db = get_db()
@@ -1218,9 +1256,9 @@ def claim():
         "(target_worker IS NULL OR target_worker = :worker_id)",
         "(required_capability IS NULL OR required_capability = '' OR instr(',' || :caps || ',', ',' || required_capability || ',') > 0)",
     ]
-    
+
     token = secrets.token_hex(16)
-    
+
     params = {
         "now": t,
         "timeout": DEFAULT_CLAIM_TIMEOUT,
@@ -1311,6 +1349,7 @@ def claim():
 # EXTEND CLAIM
 # =========================================================
 
+
 @app.route("/extend_claim/<iid>", methods=["POST"])
 def extend_claim(iid):
     data = request.get_json(silent=True)
@@ -1359,6 +1398,7 @@ def extend_claim(iid):
 # =========================================================
 # FAIL
 # =========================================================
+
 
 @app.route("/fail/<iid>", methods=["POST"])
 def fail(iid):
@@ -1442,6 +1482,7 @@ def fail(iid):
 # FULFILL & RESULT POLLING
 # =========================================================
 
+
 @app.route("/fulfill/<iid>", methods=["POST"])
 def fulfill(iid):
     db = get_db()
@@ -1516,6 +1557,7 @@ def fulfill(iid):
             pass
         return api_error("internal_error", "An internal error occurred.", 500)
 
+
 @app.route("/result/<iid>")
 def result(iid):
     row = get_db().execute("""
@@ -1563,6 +1605,7 @@ def result(iid):
 
     return jsonify(payload), 200
 
+
 @app.route("/status/<iid>")
 def status(iid):
     row = get_db().execute("""
@@ -1598,6 +1641,7 @@ def status(iid):
 # =========================================================
 # ADMIN ENDPOINTS
 # =========================================================
+
 
 @app.route("/admin/generate_key", methods=["POST"])
 def admin_generate_key():
@@ -1636,6 +1680,7 @@ def admin_generate_key():
 
     return jsonify({"api_key": key, "owner": owner}), 201
 
+
 @app.route("/admin/revoke_key", methods=["POST"])
 def admin_revoke_key():
     denied = require_admin()
@@ -1673,6 +1718,7 @@ def admin_revoke_key():
         return api_error("internal_error", "An internal error occurred.", 500)
 
     return jsonify({"ok": True}), 200
+
 
 @app.route("/admin/purge", methods=["POST"])
 def admin_purge():
@@ -1722,6 +1768,7 @@ def admin_purge():
 
     return jsonify({"ok": True}), 200
 
+
 @app.route("/admin/cleanup", methods=["POST"])
 def admin_cleanup():
     denied = require_admin()
@@ -1743,6 +1790,7 @@ def admin_cleanup():
             return api_error("cleanup_failed", "Cleanup encountered an error.", 500)
     finally:
         cleanup_lock.release()
+
 
 @app.route("/admin/intents/<iid>")
 def admin_intent_detail(iid):
@@ -1769,6 +1817,7 @@ def admin_intent_detail(iid):
         pass
 
     return jsonify(data), 200
+
 
 @app.route("/admin/intents/<iid>/cancel", methods=["POST"])
 def admin_cancel_intent(iid):
@@ -1818,6 +1867,7 @@ def admin_cancel_intent(iid):
         except Exception:
             pass
         return api_error("internal_error", "An internal error occurred.", 500)
+
 
 @app.route("/admin/intents/<iid>/retry", methods=["POST"])
 def admin_retry_intent(iid):
@@ -1872,6 +1922,7 @@ def admin_retry_intent(iid):
             pass
         return api_error("internal_error", "An internal error occurred.", 500)
 
+
 @app.route("/admin/dead")
 def admin_dead_letters():
     denied = require_admin()
@@ -1886,6 +1937,7 @@ def admin_dead_letters():
     """).fetchall()
 
     return jsonify([dict(r) for r in rows]), 200
+
 
 @app.route("/admin/dead/<intent_id>")
 def admin_dead_letter_detail(intent_id):
@@ -1914,6 +1966,7 @@ def admin_dead_letter_detail(intent_id):
 # =========================================================
 # MAIN
 # =========================================================
+
 
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
     init_db()
