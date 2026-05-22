@@ -248,9 +248,9 @@ def require_admin():
 
 
 def metrics_auth_ok():
-    bearer = request.headers.get(
-        "Authorization", "").replace("Bearer ", "").strip()
-    if bearer:
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        bearer = auth_header.replace("Bearer ", "").strip()
         return bool(METRICS_TOKEN) and hmac.compare_digest(bearer, METRICS_TOKEN)
     return admin_auth_ok()
 
@@ -535,7 +535,7 @@ def verify_signed_request(api_key):
     parsed = parse_qsl(request.query_string.decode(
         "utf-8"), keep_blank_values=True)
     canonical_query = urlencode(
-        sorted(parsed), doseq=True, quote_via=strict_quote)
+        sorted(parsed, key=lambda x: x[0]), doseq=True, quote_via=strict_quote)
     canonical_path = request.path + \
         ("?" + canonical_query if canonical_query else "")
 
@@ -1462,7 +1462,8 @@ def fail(iid):
                    claim_attempts, max_attempts, backoff_base
             FROM intents
             WHERE id = ? AND claimed_by = ? AND claim_token = ? AND status = 'claimed'
-        """, (iid, g.api_key, claim_token)).fetchone()
+              AND COALESCE(claim_expires_at, claimed_at + ?) > ?
+        """, (iid, g.api_key, claim_token, DEFAULT_CLAIM_TIMEOUT, t)).fetchone()
 
         if not row:
             db.rollback()
@@ -1566,7 +1567,8 @@ def fulfill(iid):
             SELECT id
             FROM intents
             WHERE id = ? AND claimed_by = ? AND claim_token = ? AND status = 'claimed'
-        """, (iid, g.api_key, claim_token)).fetchone()
+              AND COALESCE(claim_expires_at, claimed_at + ?) > ?
+        """, (iid, g.api_key, claim_token, DEFAULT_CLAIM_TIMEOUT, now())).fetchone()
 
         if not row:
             db.rollback()
