@@ -27,8 +27,6 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024
 
 # --- Structured JSON Logging Setup ---
-
-
 class JSONFormatter(logging.Formatter):
     ALLOWED_EXTRA = {
         "status_code", "duration_ms", "intent_id", "worker_id", "remote_addr",
@@ -54,11 +52,11 @@ class JSONFormatter(logging.Formatter):
 
             if record.exc_info:
                 log_record["exception"] = self.formatException(record.exc_info)
-
+                
             for key in self.ALLOWED_EXTRA:
                 if key in record.__dict__:
                     log_record[key] = record.__dict__[key]
-
+                    
             return json.dumps(log_record, default=str)
         except Exception as e:
             return json.dumps({
@@ -67,7 +65,6 @@ class JSONFormatter(logging.Formatter):
                 "message": "Logging failure",
                 "logger_error": str(e)
             })
-
 
 app.logger.setLevel(logging.INFO)
 app.logger.handlers.clear()
@@ -88,19 +85,15 @@ if sqlite3.sqlite_version_info < (3, 35, 0):
 
 API_KEY = os.environ.get("BUS_SECRET", "dev_secret")
 if API_KEY == "dev_secret":
-    raise RuntimeError(
-        "CRITICAL: Refusing to start. Running with default BUS_SECRET in production is unsafe.")
+    raise RuntimeError("CRITICAL: Refusing to start. Running with default BUS_SECRET in production is unsafe.")
 
 ADMIN_SECRET = os.environ.get("BUS_ADMIN_SECRET", "")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
-DB_PATH = os.environ.get("BUS_DB_PATH", os.path.join(
-    os.path.dirname(__file__), "infrastructure.db"))
-MAINTENANCE_MODE = os.environ.get(
-    "BUS_MAINTENANCE_MODE", "false").lower() == "true"
+DB_PATH = os.environ.get("BUS_DB_PATH", os.path.join(os.path.dirname(__file__), "infrastructure.db"))
+MAINTENANCE_MODE = os.environ.get("BUS_MAINTENANCE_MODE", "false").lower() == "true"
 METRICS_TOKEN = os.environ.get("BUS_METRICS_TOKEN", "")
 
-REQUIRE_SIGNATURES = os.environ.get(
-    "BUS_REQUIRE_SIGNATURES", "false").lower() == "true"
+REQUIRE_SIGNATURES = os.environ.get("BUS_REQUIRE_SIGNATURES", "false").lower() == "true"
 ENFORCE_HTTPS = os.environ.get("BUS_ENFORCE_HTTPS", "false").lower() == "true"
 
 try:
@@ -144,14 +137,11 @@ cleanup_lock = threading.Lock()
 # HELPERS
 # =========================================================
 
-
 def now():
     return time.time()
 
-
 def api_error(code, message, status_code=400):
     return jsonify({"error": {"code": code, "message": message}}), status_code
-
 
 def safe_int(value, default, min_val=None, max_val=None):
     try:
@@ -164,7 +154,6 @@ def safe_int(value, default, min_val=None, max_val=None):
         v = min(max_val, v)
     return v
 
-
 def safe_float(value, default, min_val=None, max_val=None):
     try:
         v = float(value)
@@ -176,22 +165,18 @@ def safe_float(value, default, min_val=None, max_val=None):
         v = min(max_val, v)
     return v
 
-
 def get_real_ip():
     ip = request.remote_addr or "unknown"
     if ip.startswith("::ffff:"):
         ip = ip[7:]
     return ip
 
-
 def is_local():
     ip = get_real_ip()
     return ip in ("127.0.0.1", "::1", "localhost")
 
-
 def is_busy_or_locked(exc):
     return "locked" in str(exc).lower() or "busy" in str(exc).lower()
-
 
 def is_json_safe(obj, max_depth=10, depth=0):
     if depth > max_depth:
@@ -202,19 +187,15 @@ def is_json_safe(obj, max_depth=10, depth=0):
         return all(is_json_safe(v, max_depth, depth + 1) for v in obj)
     return True
 
-
 def valid_namespace(ns: str) -> bool:
     return bool(re.match(r"^[a-zA-Z0-9_.-]{1,64}$", ns))
-
 
 def valid_label(value: str) -> bool:
     return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value))
 
-
 def strict_quote(s, safe='', encoding=None, errors=None):
     """Enforces strict RFC 3986 percent-encoding for HMAC canonicalization."""
     return quote(s, safe='', encoding=encoding or 'utf-8', errors=errors or 'strict')
-
 
 def admin_auth_ok():
     token = request.headers.get("X-Admin-Token")
@@ -234,7 +215,6 @@ def admin_auth_ok():
 
     return False
 
-
 def require_admin():
     if admin_auth_ok():
         return None
@@ -246,14 +226,11 @@ def require_admin():
     response.headers["WWW-Authenticate"] = 'Basic realm="IntentBus Admin"'
     return response
 
-
 def metrics_auth_ok():
-    bearer = request.headers.get(
-        "Authorization", "").replace("Bearer ", "").strip()
+    bearer = request.headers.get("Authorization", "").replace("Bearer ", "").strip()
     if bearer:
         return bool(METRICS_TOKEN) and hmac.compare_digest(bearer, METRICS_TOKEN)
     return admin_auth_ok()
-
 
 def maybe_cleanup():
     global last_cleanup_time, last_cleanup_error_time
@@ -290,7 +267,6 @@ def maybe_cleanup():
 # DATABASE ENGINE
 # =========================================================
 
-
 def get_db():
     if "db" not in g:
         db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
@@ -302,7 +278,6 @@ def get_db():
         g.db = db
     return g.db
 
-
 @app.teardown_appcontext
 def close_db(e):
     db = g.pop("db", None)
@@ -313,22 +288,19 @@ def close_db(e):
             pass
         db.close()
 
-
 def ensure_columns(db, table, columns):
     allowed_tables = {
-        "store", "intents", "tester_keys", "rate_limits",
+        "store", "intents", "tester_keys", "rate_limits", 
         "idempotency_keys", "request_nonces", "dead_letters"
     }
     if table not in allowed_tables:
         raise ValueError(f"Security Exception: Untrusted table name '{table}'")
 
-    existing = {row["name"] for row in db.execute(
-        f"PRAGMA table_info({table})").fetchall()}
+    existing = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
     for col_def in columns:
         col_name = col_def.split()[0]
         if col_name not in existing:
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
-
 
 def setup_schema(db):
     db.execute("""
@@ -462,14 +434,11 @@ def setup_schema(db):
     """).fetchone()
 
     if needs_migration:
-        db.execute(
-            "UPDATE intents SET namespace='default' WHERE namespace IS NULL")
-        db.execute(
-            "UPDATE intents SET run_at=created_at WHERE run_at IS NULL OR run_at=0")
+        db.execute("UPDATE intents SET namespace='default' WHERE namespace IS NULL")
+        db.execute("UPDATE intents SET run_at=created_at WHERE run_at IS NULL OR run_at=0")
         db.execute("UPDATE intents SET priority=100 WHERE priority IS NULL")
         db.execute("UPDATE intents SET max_attempts=3 WHERE max_attempts IS NULL")
-        db.execute(
-            "UPDATE intents SET backoff_base=5.0 WHERE backoff_base IS NULL")
+        db.execute("UPDATE intents SET backoff_base=5.0 WHERE backoff_base IS NULL")
 
     db.execute("DROP INDEX IF EXISTS idx_intents_routing")
     db.execute("DROP INDEX IF EXISTS idx_intents_routing_v2")
@@ -480,22 +449,14 @@ def setup_schema(db):
 
     db.execute("CREATE INDEX IF NOT EXISTS idx_intents_pub_claim ON intents(status, namespace, publisher, priority DESC, run_at, claim_attempts, created_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_intents_vis_claim ON intents(status, namespace, visibility, priority DESC, run_at, claim_attempts, created_at)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_intents_publisher ON intents(publisher, status)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_intents_cleanup ON intents(status, claim_expires_at)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_intents_failed ON intents(status, failed_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_publisher ON intents(publisher, status)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_cleanup ON intents(status, claim_expires_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_intents_failed ON intents(status, failed_at)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_store_expires ON store(expires_at)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON rate_limits(window)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_request_nonces_created ON request_nonces(created_at)")
-    db.execute(
-        "CREATE INDEX IF NOT EXISTS idx_dead_letters_created ON dead_letters(created_at)")
-
+    db.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON rate_limits(window)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_idempotency_created ON idempotency_keys(created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_request_nonces_created ON request_nonces(created_at)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_dead_letters_created ON dead_letters(created_at)")
 
 def init_db():
     with app.app_context():
@@ -505,7 +466,6 @@ def init_db():
 # AUTH & SECURITY
 # =========================================================
 
-
 def get_role(key):
     if not key:
         return None
@@ -513,7 +473,6 @@ def get_role(key):
         return "admin"
     row = get_db().execute("SELECT 1 FROM tester_keys WHERE api_key=?", (key,)).fetchone()
     return "tester" if row else None
-
 
 def verify_signed_request(api_key):
     sig = request.headers.get("X-Signature")
@@ -532,12 +491,9 @@ def verify_signed_request(api_key):
         return False, "Stale timestamp"
 
     raw_body = request.get_data(cache=True, as_text=False) or b""
-    parsed = parse_qsl(request.query_string.decode(
-        "utf-8"), keep_blank_values=True)
-    canonical_query = urlencode(
-        sorted(parsed), doseq=True, quote_via=strict_quote)
-    canonical_path = request.path + \
-        ("?" + canonical_query if canonical_query else "")
+    parsed = parse_qsl(request.query_string.decode("utf-8"), keep_blank_values=True)
+    canonical_query = urlencode(sorted(parsed), doseq=True, quote_via=strict_quote)
+    canonical_path = request.path + ("?" + canonical_query if canonical_query else "")
 
     msg = b"\n".join([
         request.method.upper().encode(),
@@ -554,8 +510,7 @@ def verify_signed_request(api_key):
     db = get_db()
     try:
         db.execute("BEGIN IMMEDIATE")
-        db.execute("INSERT INTO request_nonces VALUES (?, ?, ?)",
-                   (api_key, nonce, now()))
+        db.execute("INSERT INTO request_nonces VALUES (?, ?, ?)", (api_key, nonce, now()))
         db.commit()
         return True, None
     except sqlite3.IntegrityError:
@@ -581,7 +536,6 @@ def verify_signed_request(api_key):
 # CLEANUP
 # =========================================================
 
-
 def archive_dead_letter(db, row, reason):
     db.execute("""
         INSERT OR REPLACE INTO dead_letters (
@@ -599,7 +553,6 @@ def archive_dead_letter(db, row, reason):
         reason,
         now(),
     ))
-
 
 def run_cleanup_once():
     db = None
@@ -630,20 +583,16 @@ def run_cleanup_once():
         cur = db.execute("DELETE FROM store WHERE expires_at < ?", (t,))
         stats["store_deleted"] = cur.rowcount
 
-        cur = db.execute(
-            "DELETE FROM rate_limits WHERE window < ?", (t - 3600,))
+        cur = db.execute("DELETE FROM rate_limits WHERE window < ?", (t - 3600,))
         stats["rate_limits_deleted"] = cur.rowcount
 
-        cur = db.execute(
-            "DELETE FROM idempotency_keys WHERE created_at < ?", (t - 3600,))
+        cur = db.execute("DELETE FROM idempotency_keys WHERE created_at < ?", (t - 3600,))
         stats["idempotency_deleted"] = cur.rowcount
 
-        cur = db.execute(
-            "DELETE FROM request_nonces WHERE created_at < ?", (t - NONCE_RETENTION_SECONDS,))
+        cur = db.execute("DELETE FROM request_nonces WHERE created_at < ?", (t - NONCE_RETENTION_SECONDS,))
         stats["nonces_deleted"] = cur.rowcount
 
-        cur = db.execute(
-            "DELETE FROM intents WHERE status='open' AND expires_at < ?", (t,))
+        cur = db.execute("DELETE FROM intents WHERE status='open' AND expires_at < ?", (t,))
         stats["expired_open_deleted"] = cur.rowcount
 
         expired_claims = db.execute("""
@@ -683,8 +632,7 @@ def run_cleanup_once():
                 stats["expired_claims_dead"] += 1
             else:
                 jitter = random.uniform(0, 2)
-                next_run = t + (r["backoff_base"] *
-                                (2 ** r["claim_attempts"])) + jitter
+                next_run = t + (r["backoff_base"] * (2 ** r["claim_attempts"])) + jitter
                 db.execute("""
                     UPDATE intents
                     SET status='open',
@@ -701,20 +649,17 @@ def run_cleanup_once():
                 """, (next_run, r["id"]))
                 stats["expired_claims_requeued"] += 1
 
-        cur = db.execute("DELETE FROM intents WHERE status='fulfilled' AND completed_at < ?",
-                         (t - FULFILLED_RETENTION_SECONDS,))
+        cur = db.execute("DELETE FROM intents WHERE status='fulfilled' AND completed_at < ?", (t - FULFILLED_RETENTION_SECONDS,))
         stats["fulfilled_deleted"] = cur.rowcount
 
-        cur = db.execute(
-            "DELETE FROM intents WHERE status='dead' AND failed_at < ?", (t - DEAD_RETENTION_SECONDS,))
+        cur = db.execute("DELETE FROM intents WHERE status='dead' AND failed_at < ?", (t - DEAD_RETENTION_SECONDS,))
         stats["dead_deleted"] = cur.rowcount
 
-        cur = db.execute(
-            "DELETE FROM dead_letters WHERE created_at < ?", (t - DEAD_RETENTION_SECONDS,))
+        cur = db.execute("DELETE FROM dead_letters WHERE created_at < ?", (t - DEAD_RETENTION_SECONDS,))
         stats["dead_letters_deleted"] = cur.rowcount
 
         db.commit()
-
+        
         # Emit cleanup telemetry
         app.logger.info("cleanup_complete", extra=stats)
         return True, stats
@@ -747,7 +692,6 @@ def run_cleanup_once():
 # REQUEST LIFECYCLE
 # =========================================================
 
-
 @app.before_request
 def security():
     # Defensive trace ID sanitization
@@ -757,7 +701,7 @@ def security():
             g.request_id = req_id
         else:
             g.request_id = uuid.uuid4().hex
-
+            
     g.request_start = time.perf_counter()
 
     if request.path in ("/", "/health"):
@@ -803,20 +747,16 @@ def security():
         t = now()
         try:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT count, window FROM rate_limits WHERE identifier=?", (key,)).fetchone()
+            row = db.execute("SELECT count, window FROM rate_limits WHERE identifier=?", (key,)).fetchone()
             if not row or t - row["window"] > RATE_LIMIT_WINDOW:
-                db.execute(
-                    "REPLACE INTO rate_limits VALUES (?, 1, ?)", (key, t))
+                db.execute("REPLACE INTO rate_limits VALUES (?, 1, ?)", (key, t))
             elif row["count"] >= RATE_LIMIT_MAX:
                 db.rollback()
                 return api_error("rate_limited", "Too many requests.", 429)
             else:
-                db.execute(
-                    "UPDATE rate_limits SET count=count+1 WHERE identifier=?", (key,))
+                db.execute("UPDATE rate_limits SET count=count+1 WHERE identifier=?", (key,))
 
-            db.execute(
-                "UPDATE tester_keys SET total_requests=total_requests+1 WHERE api_key=?", (key,))
+            db.execute("UPDATE tester_keys SET total_requests=total_requests+1 WHERE api_key=?", (key,))
             db.commit()
         except sqlite3.OperationalError:
             try:
@@ -831,12 +771,10 @@ def security():
                 pass
             return api_error("internal_error", "An internal error occurred.", 500)
 
-
 @app.after_request
 def log_response(response):
     start_time = getattr(g, "request_start", None)
-    duration_ms = round((time.perf_counter() - start_time)
-                        * 1000, 2) if start_time else 0.0
+    duration_ms = round((time.perf_counter() - start_time) * 1000, 2) if start_time else 0.0
 
     app.logger.info(
         "request_complete",
@@ -845,7 +783,7 @@ def log_response(response):
             "duration_ms": duration_ms,
         },
     )
-
+    
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -857,11 +795,9 @@ def log_response(response):
 # ROOT / HEALTH
 # =========================================================
 
-
 @app.route("/")
 def index():
     return "Intent Bus V7.61", 200
-
 
 @app.route("/health")
 def health():
@@ -870,7 +806,6 @@ def health():
 # =========================================================
 # DASHBOARD
 # =========================================================
-
 
 DASHBOARD_HTML = """
 {% autoescape true %}
@@ -966,7 +901,6 @@ DASHBOARD_HTML = """
 {% endautoescape %}
 """
 
-
 @app.route("/admin/dashboard")
 def admin_dashboard():
     denied = require_admin()
@@ -1025,7 +959,6 @@ def admin_dashboard():
 # METRICS
 # =========================================================
 
-
 @app.route("/metrics")
 def metrics():
     db = get_db()
@@ -1042,10 +975,8 @@ def metrics():
             f'intent_bus_intents_total{{status="{r["status"]}",namespace="{r["namespace"]}"}} {r["c"]}'
         )
 
-    dead_count = db.execute(
-        "SELECT COUNT(*) AS c FROM dead_letters").fetchone()["c"]
-    tester_count = db.execute(
-        "SELECT COUNT(*) AS c FROM tester_keys").fetchone()["c"]
+    dead_count = db.execute("SELECT COUNT(*) AS c FROM dead_letters").fetchone()["c"]
+    tester_count = db.execute("SELECT COUNT(*) AS c FROM tester_keys").fetchone()["c"]
 
     lines += [
         "# HELP intent_bus_dead_letters_total Total dead-letter intents",
@@ -1061,7 +992,6 @@ def metrics():
 # =========================================================
 # KV STORE
 # =========================================================
-
 
 @app.route("/set/<key>", methods=["POST"])
 def set_value(key):
@@ -1098,7 +1028,6 @@ def set_value(key):
 
     return jsonify({"ok": True})
 
-
 @app.route("/get/<key>")
 def get_value(key):
     row = get_db().execute(
@@ -1112,7 +1041,6 @@ def get_value(key):
 # =========================================================
 # INTENT CREATION
 # =========================================================
-
 
 @app.route("/intent", methods=["POST"])
 def create_intent():
@@ -1143,14 +1071,11 @@ def create_intent():
     if len(payload_str.encode()) > MAX_PAYLOAD:
         return api_error("payload_too_large", "Payload too large.", 413)
 
-    priority = safe_int(data.get("priority"),
-                        DEFAULT_PRIORITY, 0, MAX_PRIORITY)
+    priority = safe_int(data.get("priority"), DEFAULT_PRIORITY, 0, MAX_PRIORITY)
     delay = safe_float(data.get("delay"), 0.0, 0.0)
     run_at = now() + delay
-    max_attempts = safe_int(data.get("max_attempts"),
-                            DEFAULT_MAX_ATTEMPTS, 1, 20)
-    backoff_base = safe_float(data.get("backoff_base"),
-                              DEFAULT_BACKOFF_BASE, 1.0, 3600.0)
+    max_attempts = safe_int(data.get("max_attempts"), DEFAULT_MAX_ATTEMPTS, 1, 20)
+    backoff_base = safe_float(data.get("backoff_base"), DEFAULT_BACKOFF_BASE, 1.0, 3600.0)
     visibility = "public" if data.get("visibility") == "public" else "private"
 
     target_worker = str(data.get("target_worker", "")).strip()[:64]
@@ -1164,8 +1089,7 @@ def create_intent():
     body_hash = None
     if idem_key:
         body_hash = hashlib.sha256(
-            json.dumps(data, sort_keys=True, separators=(
-                ",", ":")).encode("utf-8")
+            json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
 
     iid = secrets.token_hex(16)
@@ -1257,7 +1181,6 @@ def create_intent():
 # CLAIM
 # =========================================================
 
-
 @app.route("/claim", methods=["POST"])
 def claim():
     db = get_db()
@@ -1277,8 +1200,7 @@ def claim():
         or request.args.get("capabilities", "").strip()
         or request.args.get("capability", "").strip()
     )[:256]
-    worker_caps_normalized = ",".join(
-        [c.strip() for c in worker_capabilities.split(",") if c.strip()])
+    worker_caps_normalized = ",".join([c.strip() for c in worker_capabilities.split(",") if c.strip()])
 
     if not valid_namespace(target_namespace):
         return api_error("invalid_namespace", "Namespace must be 1-64 alphanumeric chars, dots, dashes, or underscores.")
@@ -1296,9 +1218,9 @@ def claim():
         "(target_worker IS NULL OR target_worker = :worker_id)",
         "(required_capability IS NULL OR required_capability = '' OR instr(',' || :caps || ',', ',' || required_capability || ',') > 0)",
     ]
-
+    
     token = secrets.token_hex(16)
-
+    
     params = {
         "now": t,
         "timeout": DEFAULT_CLAIM_TIMEOUT,
@@ -1389,7 +1311,6 @@ def claim():
 # EXTEND CLAIM
 # =========================================================
 
-
 @app.route("/extend_claim/<iid>", methods=["POST"])
 def extend_claim(iid):
     data = request.get_json(silent=True)
@@ -1439,7 +1360,6 @@ def extend_claim(iid):
 # FAIL
 # =========================================================
 
-
 @app.route("/fail/<iid>", methods=["POST"])
 def fail(iid):
     data = request.get_json(silent=True)
@@ -1486,8 +1406,7 @@ def fail(iid):
             archive_dead_letter(db, row, error_text)
         else:
             jitter = random.uniform(0, 2)
-            next_run = t + (row["backoff_base"] *
-                            (2 ** row["claim_attempts"])) + jitter
+            next_run = t + (row["backoff_base"] * (2 ** row["claim_attempts"])) + jitter
             db.execute("""
                 UPDATE intents
                 SET status = 'open',
@@ -1523,7 +1442,6 @@ def fail(iid):
 # FULFILL & RESULT POLLING
 # =========================================================
 
-
 @app.route("/fulfill/<iid>", methods=["POST"])
 def fulfill(iid):
     db = get_db()
@@ -1552,8 +1470,7 @@ def fulfill(iid):
             return api_error("invalid_payload", "Result exceeds maximum nesting depth.", 400)
 
         try:
-            result_text = result_payload if result_type == "text" else json.dumps(
-                result_payload, separators=(",", ":"))
+            result_text = result_payload if result_type == "text" else json.dumps(result_payload, separators=(",", ":"))
         except Exception:
             return api_error("invalid_result", "Result must be serializable.")
 
@@ -1598,7 +1515,6 @@ def fulfill(iid):
         except Exception:
             pass
         return api_error("internal_error", "An internal error occurred.", 500)
-
 
 @app.route("/result/<iid>")
 def result(iid):
@@ -1647,7 +1563,6 @@ def result(iid):
 
     return jsonify(payload), 200
 
-
 @app.route("/status/<iid>")
 def status(iid):
     row = get_db().execute("""
@@ -1683,7 +1598,6 @@ def status(iid):
 # =========================================================
 # ADMIN ENDPOINTS
 # =========================================================
-
 
 @app.route("/admin/generate_key", methods=["POST"])
 def admin_generate_key():
@@ -1722,7 +1636,6 @@ def admin_generate_key():
 
     return jsonify({"api_key": key, "owner": owner}), 201
 
-
 @app.route("/admin/revoke_key", methods=["POST"])
 def admin_revoke_key():
     denied = require_admin()
@@ -1743,8 +1656,7 @@ def admin_revoke_key():
         db.execute("BEGIN IMMEDIATE")
         db.execute("DELETE FROM tester_keys WHERE api_key = ?", (target_key,))
         db.execute("DELETE FROM rate_limits WHERE identifier = ?", (target_key,))
-        db.execute("DELETE FROM idempotency_keys WHERE api_key = ?",
-                   (target_key,))
+        db.execute("DELETE FROM idempotency_keys WHERE api_key = ?", (target_key,))
         db.execute("DELETE FROM request_nonces WHERE api_key = ?", (target_key,))
         db.commit()
     except sqlite3.OperationalError:
@@ -1761,7 +1673,6 @@ def admin_revoke_key():
         return api_error("internal_error", "An internal error occurred.", 500)
 
     return jsonify({"ok": True}), 200
-
 
 @app.route("/admin/purge", methods=["POST"])
 def admin_purge():
@@ -1786,8 +1697,7 @@ def admin_purge():
     try:
         db.execute("BEGIN IMMEDIATE")
         if namespace:
-            db.execute(
-                "DELETE FROM dead_letters WHERE namespace = ?", (namespace,))
+            db.execute("DELETE FROM dead_letters WHERE namespace = ?", (namespace,))
             db.execute("DELETE FROM intents WHERE namespace = ?", (namespace,))
         else:
             db.execute("DELETE FROM dead_letters")
@@ -1812,7 +1722,6 @@ def admin_purge():
 
     return jsonify({"ok": True}), 200
 
-
 @app.route("/admin/cleanup", methods=["POST"])
 def admin_cleanup():
     denied = require_admin()
@@ -1834,7 +1743,6 @@ def admin_cleanup():
             return api_error("cleanup_failed", "Cleanup encountered an error.", 500)
     finally:
         cleanup_lock.release()
-
 
 @app.route("/admin/intents/<iid>")
 def admin_intent_detail(iid):
@@ -1861,7 +1769,6 @@ def admin_intent_detail(iid):
         pass
 
     return jsonify(data), 200
-
 
 @app.route("/admin/intents/<iid>/cancel", methods=["POST"])
 def admin_cancel_intent(iid):
@@ -1911,7 +1818,6 @@ def admin_cancel_intent(iid):
         except Exception:
             pass
         return api_error("internal_error", "An internal error occurred.", 500)
-
 
 @app.route("/admin/intents/<iid>/retry", methods=["POST"])
 def admin_retry_intent(iid):
@@ -1966,7 +1872,6 @@ def admin_retry_intent(iid):
             pass
         return api_error("internal_error", "An internal error occurred.", 500)
 
-
 @app.route("/admin/dead")
 def admin_dead_letters():
     denied = require_admin()
@@ -1981,7 +1886,6 @@ def admin_dead_letters():
     """).fetchall()
 
     return jsonify([dict(r) for r in rows]), 200
-
 
 @app.route("/admin/dead/<intent_id>")
 def admin_dead_letter_detail(intent_id):
@@ -2010,7 +1914,6 @@ def admin_dead_letter_detail(intent_id):
 # =========================================================
 # MAIN
 # =========================================================
-
 
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
     init_db()
