@@ -3,17 +3,17 @@
 ## Supported Versions
 
 | Component | Version | Status |
-| :--- | :--- | :--- |
-| Intent Bus Server | v7.6+ | ✅ Supported |
-| Python SDK (`intent-bus`) | v2.0.0+ | ✅ Supported |
+|---|---|---|
+| Intent Bus Server | v7.61+ | ✅ Supported |
+| Python SDK (`intent-bus`) | v2.1.0+ | ✅ Supported |
 
 ---
 
-## Security Model Overview
+# Security Model Overview
 
-Intent Bus uses a **Dual-Auth Model** to balance simplicity and security.
+Intent Bus uses a dual-authentication model designed to balance operational simplicity with stronger cryptographic protections when needed.
 
-### 1. Standard Authentication
+## 1. Standard Authentication
 
 Requires:
 
@@ -21,37 +21,79 @@ Requires:
 X-API-KEY: <key>
 ```
 
-Used over HTTPS, this protects against passive network interception.
+Used over HTTPS, this protects against passive interception.
 
-#### Limitation
+### Limitation
 
-Standard authentication does **not** provide replay protection. Captured requests may be replayed by an attacker capable of intercepting traffic.
+Standard authentication does **not** provide replay protection.
+Captured requests MAY be replayed by an attacker capable of intercepting traffic.
 
 ---
 
-### 2. Strict Authentication (HMAC)
+## 2. Strict Authentication (HMAC)
 
-Each request includes:
+Strict Auth adds:
 
-- Timestamp
-- Nonce
-- HMAC-SHA256 signature
+- Timestamp validation
+- Nonce replay prevention
+- HMAC-SHA256 request signing
 
-Provides:
+This provides:
 
 - Replay protection
 - Payload integrity
 - Request authenticity
 
-#### Cryptographic Guarantees
+Enable globally with:
 
-- **Constant-Time Verification:** HMAC signatures are verified using constant-time comparison (`hmac.compare_digest`) to prevent timing attacks.
-- **Replay Window:** Strict authentication enforces a bounded timestamp validity window to prevent delayed replay attacks. The enforced clock skew tolerance is **±300 seconds**.
-- **Nonce Storage:** Nonces are stored persistently in the SQLite `request_nonces` table (scoped per API key) to prevent reuse within the validity window. Expired nonces are automatically purged during the server's scheduled cleanup passes.
+```bash
+BUS_REQUIRE_SIGNATURES=true
+```
 
-#### Signature Format
+or allow clients to opt-in by including signature headers.
 
-Strict Auth signs a canonical request representation. The HMAC-SHA256 signature is computed using the API key as the secret over the following newline-delimited (`\n`) string:
+### Required Headers
+
+```http
+X-API-KEY: <key>
+X-Timestamp: <unix timestamp>
+X-Nonce: <unique nonce>
+X-Signature: <hex digest>
+```
+
+---
+
+# Cryptographic Guarantees
+
+## Constant-Time Verification
+
+HMAC signatures are verified using constant-time comparison (`hmac.compare_digest`) to mitigate timing attacks.
+
+---
+
+## Replay Window
+
+Strict Auth enforces a bounded timestamp validity window:
+
+```text
+±300 seconds
+```
+
+Requests outside this skew window are rejected.
+
+---
+
+## Nonce Storage
+
+Nonces are stored in the SQLite `request_nonces` table and scoped per API key.
+
+Expired nonces are purged during scheduled cleanup passes.
+
+---
+
+## Canonical Signature Format
+
+The HMAC-SHA256 signature is computed over the following newline-delimited string:
 
 ```text
 HTTP_METHOD
@@ -60,233 +102,352 @@ TIMESTAMP
 NONCE
 REQUEST_BODY
 ```
-*Note: `CANONICAL_REQUEST_PATH` includes sorted query parameters. `REQUEST_BODY` uses the exact bytes transmitted in the request body (empty bodies serialize as an empty string).*
 
-#### Recommendation
+### Canonicalization Rules
 
-Use Strict Auth in all production environments.
-Enable globally with:
+- `HTTP_METHOD` MUST be uppercase
+- `REQUEST_BODY` MUST use the exact transmitted bytes
+- Empty bodies serialize as an empty string
+- Query parameters MUST:
+  - preserve repeated parameters
+  - preserve blank values
+  - be sorted lexicographically by key
+  - use strict RFC 3986 percent-encoding
+  - encode `/` as `%2F`
+- The final digest MUST be lowercase hexadecimal
 
-```bash
-BUS_REQUIRE_SIGNATURES=true
-```
+### Important
+
+Clients MUST NOT deserialize and re-serialize JSON before signing.
+Whitespace and key-order differences will invalidate signatures.
 
 ---
 
-## Server Operations
+# Claim Ownership Isolation (Protocol v2.1)
 
-### Admin & Dashboard Access
+Intent Bus v2.1 introduces cryptographically isolated claim locks using ephemeral `claim_token` values.
 
-Admin endpoints (`/admin/*`) and the dashboard use a separate privileged authentication layer.
+Any state mutation on a claimed intent now requires the currently valid token.
+
+Protected endpoints:
+
+- `/fulfill/<id>`
+- `/fail/<id>`
+- `/extend_claim/<id>`
+
+This prevents workers sharing the same API key from interfering with each other’s active claims.
+
+### Lease-Loss Semantics
+
+If a worker receives:
+
+```http
+404 Not Found
+```
+
+during `/fulfill`, `/fail`, or `/extend_claim`, the worker MUST treat the lease as permanently lost and MUST NOT retry the mutation.
+
+The claim may have:
+
+- expired
+- been reclaimed
+- been overwritten by another claim
+- been deleted
+
+---
+
+# Server Operations
+
+## Admin & Dashboard Access
+
+Admin endpoints (`/admin/*`) use a separate privileged authentication layer.
+
 Supported methods:
 
-1. Header authentication:
+### Header Authentication
 
 ```http
 X-Admin-Token: <BUS_ADMIN_SECRET>
 ```
 
-2. HTTP Basic authentication:
+### HTTP Basic Authentication
 
 ```text
 Username: admin
 Password: <DASHBOARD_PASSWORD>
 ```
 
+There is no fallback from admin auth to standard API-key authentication.
+
 ---
 
-### Reverse Proxy & HTTPS
+# Reverse Proxy & HTTPS
 
-The server can strictly enforce HTTPS in production:
+HTTPS enforcement:
 
 ```bash
 BUS_ENFORCE_HTTPS=true
 ```
 
-If deploying behind Nginx, Apache, Traefik, or another reverse proxy:
+When deploying behind Nginx, Apache, Traefik, or another reverse proxy:
 
-- Ensure `X-Forwarded-Proto` is forwarded correctly
-- Set `BUS_TRUST_PROXY=true` to enable Werkzeug `ProxyFix` support.
+- forward `X-Forwarded-Proto`
+- enable:
 
-#### Security Headers
+```bash
+BUS_TRUST_PROXY=true
+```
 
-The Intent Bus server automatically sets the following baseline headers on all HTTP responses (including errors):
-- `X-Content-Type-Options: nosniff`
-- `X-Frame-Options: DENY`
-- `Referrer-Policy: no-referrer`
-- `Cache-Control: no-store`
-
-When deploying behind a reverse proxy in production, you SHOULD additionally configure:
-- `Strict-Transport-Security` (HSTS)
+to activate Werkzeug `ProxyFix`.
 
 ---
 
-## Threat Model (High-Level)
+# Security Headers
 
-### Security Assumptions
+The server automatically includes:
+
+```text
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+Referrer-Policy: no-referrer
+Cache-Control: no-store
+X-Intent-Version: <version>
+```
+
+Production deployments SHOULD additionally configure:
+
+```text
+Strict-Transport-Security
+```
+
+at the reverse proxy layer.
+
+---
+
+# Threat Model
+
+## Security Assumptions
+
 Intent Bus assumes:
-- Trusted server host environment
-- Correct TLS termination at the proxy or network edge
-- Secure storage of API credentials by clients
-- Reasonably synchronized system clocks across clients and servers when using Strict Auth
 
-### Mitigated
+- trusted server host environment
+- correct TLS termination
+- secure client credential storage
+- reasonably synchronized clocks for Strict Auth
+
+---
+
+## Mitigated Threats
 
 - Replay attacks (Strict Auth only)
-- Concurrent claim race conditions (SQLite transactional locking)
-- Infinite retry loops (configurable max attempts)
-- Cross-tenant access (API key + namespace isolation)
-- Basic denial-of-service abuse (rate limits and payload caps)
-- Log Injection and SIEM spoofing (strict X-Request-ID regex validation)
-
-### Not Mitigated
-
-- Arbitrary code execution by workers (workers act as un-sandboxed execution agents by design; host isolation is the user's responsibility)
-- Compromised API keys
-- Host/VPS compromise
-- Side-channel attacks
+- Concurrent claim race conditions
+- Lock hijacking between workers
+- Infinite retry loops
+- Cross-tenant access
+- Basic denial-of-service abuse
+- Log injection / SIEM spoofing
+- Signature timing attacks
 
 ---
 
-## Reporting a Vulnerability
+## Not Mitigated
 
-**Do not open public GitHub issues for security vulnerabilities.**
+Intent Bus does NOT attempt to mitigate:
+
+- Arbitrary code execution by workers
+- Compromised API keys
+- Host/VPS compromise
+- Malicious worker logic
+- Side-channel attacks
+
+Workers are intentionally treated as unsandboxed execution agents.
+
+---
+
+# Reporting a Vulnerability
+
+## Do NOT open public GitHub issues for vulnerabilities.
 
 Report privately via:
 
 - **Email:** dsecurity49@gmail.com
+- **Discord:** DM `dsecurity`
 
 ---
 
-### Include in Your Report
+# Include in Your Report
 
-- Clear description of the issue
-- Step-by-step reproduction
-- Proof of concept (if available)
-- Impact assessment
+Please include:
 
----
-
-### Response Policy
-
-- **Acknowledgement:** within 48 hours
-- **Initial triage:** within 3–5 days
-- **Fix timeline:** depends on severity
-
-Valid reports may receive:
-
-- Credit in release notes (optional)
-- Fast-tracked fixes
+- clear issue description
+- reproduction steps
+- proof of concept (if available)
+- impact assessment
 
 ---
 
-## Security Best Practices
+# Response Policy
 
-When using Intent Bus:
+| Stage | Target |
+|---|---|
+| Acknowledgement | within 48 hours |
+| Initial triage | within 3–5 days |
+| Fix timeline | severity dependent |
 
-- **Key Entropy:** API keys should contain at least 128 bits of entropy and be generated using a cryptographically secure random source.
-- NEVER expose API keys in client-side code
+Valid reports MAY receive release-note credit.
+
+---
+
+# Security Best Practices
+
+When operating Intent Bus:
+
 - ALWAYS use HTTPS
 - USE Strict Auth in production
 - ROTATE API keys periodically
-- AVOID storing sensitive data in payloads
+- STORE API keys securely
+- AVOID sensitive payload contents
+- GENERATE keys using cryptographically secure randomness
+- ENSURE workers are idempotent
+
+API keys SHOULD contain at least 128 bits of entropy.
 
 ---
 
-## Known Limitations
+# Known Limitations
 
-### 1. Payload Exposure
+## 1. Payload Exposure
 
-Payloads are **not encrypted at rest** within the SQLite database.
+Payloads are NOT encrypted at rest inside SQLite.
 
-> ⚠️ **CRITICAL: Public intents (`visibility="public"`) may be claimed by any authenticated worker in the same namespace. They should be treated as non-confidential broadcast work items.**
-
-#### Do NOT include:
+### Never include:
 
 - API keys
-- Passwords
+- passwords
+- access tokens
 - PII
-- Secrets of any kind
+- secrets
 
----
+### Public Intent Warning
 
-### 2. Data Retention
-
-- Intents are ephemeral.
-- Open intents expire via TTL (default: 24 hours).
-- Fulfilled intents and dead letters are **eligible for deletion** after 7 days during scheduled cleanup passes.
-- KV store values expire at their configured TTL.
-
----
-
-### 3. Hardcoded Limits (Anti-DoS)
-
-The following limits are enforced to protect the single-file SQLite architecture:
-
-| Limit | Value |
-| --- | --- |
-| Payload Size | 8KB maximum |
-| Rate Limit | 60 requests / minute (Enforced per API key) |
-| Open Intent Cap | 2000 open intents per publisher key |
-
-*Note: Admin keys globally bypass rate limits and open-intent caps across all endpoints.*
-
----
-
-### 4. Concurrency & Horizontal Scaling
-
-SQLite is operated in **WAL (Write-Ahead Logging) mode** for improved concurrent read/write behavior. However, it remains a single-writer model.
-Under high load:
-
-- Increased latency may occur
-- Requests may temporarily fail with:
-
-```http
-503 Service Unavailable
+```text
+visibility="public"
 ```
 
-Clients SHOULD implement exponential backoff with jitter. For workloads exceeding thousands of jobs per minute, users should implement a federation pattern or migrate the `get_db()` implementation to PostgreSQL.
+allows any authenticated worker in the namespace to claim the job.
+
+Public intents should be treated as non-confidential broadcast work items.
 
 ---
 
-### 5. Replay Protection Scope
+## 2. Data Retention
 
-Replay protection is enforced **only** when using Strict Auth.
+Default retention behavior:
 
-Standard authentication is replayable by design.
+| Data | Retention |
+|---|---|
+| Open intents | TTL-based expiry (default 24h) |
+| Fulfilled intents | eligible for deletion after 7 days |
+| Dead letters | eligible for deletion after 7 days |
+| KV entries | expire at configured TTL |
+
+Cleanup is traffic-triggered and lazy.
 
 ---
 
-## Out of Scope
+## 3. Anti-DoS Limits
+
+| Limit | Value |
+|---|---|
+| Payload size | 8KB |
+| Rate limit | 60 req/min per API key |
+| Open intent cap | 2000 open/claimed intents per key |
+
+Admin credentials bypass these limits.
+
+---
+
+## 4. Concurrency & Scaling
+
+SQLite operates in WAL mode but remains a single-writer architecture.
+
+Under load:
+
+- latency MAY increase
+- temporary `503 Service Unavailable` responses MAY occur
+- `SQLITE_BUSY` contention MAY appear
+
+Clients SHOULD implement exponential backoff with jitter.
+
+For workloads beyond low-thousands of jobs/minute:
+
+- federate buses, or
+- migrate `get_db()` to PostgreSQL
+
+---
+
+## 5. Replay Protection Scope
+
+Replay protection exists ONLY under Strict Auth.
+
+Standard authentication remains replayable by design.
+
+---
+
+# Out of Scope
 
 The following are NOT considered vulnerabilities:
 
 - Denial-of-service using valid requests
 - Worker-side execution bugs
-- Unsafe user code (e.g. `eval`)
-- API key misuse by authorized users
+- Unsafe user code
+- API-key misuse by authorized users
 - Expected retry behavior
-- SQLite `database is locked` errors under heavy concurrency
+- SQLite contention under heavy concurrency
 
 ---
 
-## Responsible Disclosure
+# Responsible Disclosure History
 
-### 2026-05-17: Privilege Escalation and Default Credential Fixes
-- **Default Secret in Debug Mode:** Previously, the server allowed the default `dev_secret` API key if the application was started in debug mode. This was patched to unconditionally reject the default secret in all environments to prevent accidental exposure.
-- **Admin Token Fallback:** Previously, if `BUS_ADMIN_SECRET` was left unset, the server fell back to accepting the standard `BUS_SECRET` as an admin token. This was patched to fail closed. If an admin token is not explicitly configured, header-based admin authentication is disabled to prevent privilege escalation from leaked tester keys.
+## 2026-05-21 — Claim Isolation & HMAC Determinism
+
+### Lock Hijacking Mitigation
+
+Previously, workers sharing the same API key could potentially interfere with active claims if they knew the intent ID.
+
+Protocol v2.1 fixed this by introducing ephemeral `claim_token` validation for all state mutations.
+
+### HMAC Canonicalization
+
+Fixed deterministic-signature mismatches by enforcing strict RFC 3986 percent-encoding during canonical request generation.
 
 ---
 
-## Disclosure Policy
+## 2026-05-17 — Admin Escalation & Default Credential Hardening
 
-- Fixes are released before public disclosure
-- Critical patches may be shipped without advance notice
-- Changelogs include relevant security notes when applicable
+### Default Secret Rejection
+
+The default `dev_secret` was previously accepted under debug conditions.
+
+This behavior was removed entirely.
+
+### Admin Token Fallback
+
+Older behavior allowed fallback from admin auth to `BUS_SECRET`.
+
+This was replaced with fail-closed admin authentication.
 
 ---
 
-## Contact
+# Disclosure Policy
+
+- Security fixes are released before public disclosure
+- Critical patches MAY ship without advance notice
+- Relevant fixes are documented in changelogs
+
+---
+
+# Contact
 
 For security concerns:
 
@@ -297,6 +458,6 @@ For non-sensitive communication, DM `dsecurity`.
 
 ---
 
-## License
+# License
 
 MIT

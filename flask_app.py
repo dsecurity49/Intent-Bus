@@ -193,6 +193,10 @@ def valid_namespace(ns: str) -> bool:
 def valid_label(value: str) -> bool:
     return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value))
 
+def strict_quote(s, safe='', encoding=None, errors=None):
+    """Enforces strict RFC 3986 percent-encoding for HMAC canonicalization."""
+    return quote(s, safe='', encoding=encoding or 'utf-8', errors=errors or 'strict')
+
 def admin_auth_ok():
     token = request.headers.get("X-Admin-Token")
 
@@ -219,9 +223,7 @@ def require_admin():
         "Authentication required.",
         401,
     )
-
     response.headers["WWW-Authenticate"] = 'Basic realm="IntentBus Admin"'
-
     return response
 
 def metrics_auth_ok():
@@ -248,7 +250,6 @@ def maybe_cleanup():
         return
 
     try:
-        # Double check inside lock
         if now() - last_cleanup_time < CLEANUP_INTERVAL_SECONDS:
             return
 
@@ -326,6 +327,7 @@ def setup_schema(db):
         claimed_at           REAL,
         claim_expires_at     REAL,
         claimed_by           TEXT,
+        claim_token          TEXT,
         publisher            TEXT NOT NULL,
         claim_attempts       INTEGER DEFAULT 0,
         max_attempts         INTEGER DEFAULT 3,
@@ -406,6 +408,7 @@ def setup_schema(db):
         "claimed_at REAL",
         "claim_expires_at REAL",
         "claimed_by TEXT",
+        "claim_token TEXT",
         "publisher TEXT",
         "claim_attempts INTEGER DEFAULT 0",
         "max_attempts INTEGER DEFAULT 3",
@@ -489,7 +492,7 @@ def verify_signed_request(api_key):
 
     raw_body = request.get_data(cache=True, as_text=False) or b""
     parsed = parse_qsl(request.query_string.decode("utf-8"), keep_blank_values=True)
-    canonical_query = urlencode(sorted(parsed), doseq=True, quote_via=quote)
+    canonical_query = urlencode(sorted(parsed), doseq=True, quote_via=strict_quote)
     canonical_path = request.path + ("?" + canonical_query if canonical_query else "")
 
     msg = b"\n".join([
@@ -608,9 +611,9 @@ def run_cleanup_once():
                     SET status='dead',
                         failed_at=?,
                         last_error=COALESCE(last_error, 'Max retries exceeded'),
-                        claimed_by=NULL,
                         claimed_at=NULL,
                         claim_expires_at=NULL,
+                        claim_token=NULL,
                         result=NULL,
                         result_type=NULL,
                         completed_at=NULL
@@ -637,6 +640,7 @@ def run_cleanup_once():
                         claimed_by=NULL,
                         claimed_at=NULL,
                         claim_expires_at=NULL,
+                        claim_token=NULL,
                         last_error=COALESCE(last_error, 'Lease expired. Backing off.'),
                         result=NULL,
                         result_type=NULL,
@@ -784,7 +788,7 @@ def log_response(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Intent-Version"] = "7.6"
+    response.headers["X-Intent-Version"] = "7.61"
     return response
 
 # =========================================================
@@ -793,11 +797,11 @@ def log_response(response):
 
 @app.route("/")
 def index():
-    return "Intent Bus V7.6", 200
+    return "Intent Bus V7.61", 200
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "ts": now(), "version": "7.6"}), 200
+    return jsonify({"ok": True, "ts": now(), "version": "7.61"}), 200
 
 # =========================================================
 # DASHBOARD
@@ -944,7 +948,7 @@ def admin_dashboard():
 
     return render_template_string(
         DASHBOARD_HTML,
-        version="7.6",
+        version="7.61",
         stats=stats,
         intents=intents,
         keys=keys,
@@ -1214,11 +1218,15 @@ def claim():
         "(target_worker IS NULL OR target_worker = :worker_id)",
         "(required_capability IS NULL OR required_capability = '' OR instr(',' || :caps || ',', ',' || required_capability || ',') > 0)",
     ]
+    
+    token = secrets.token_hex(16)
+    
     params = {
         "now": t,
         "timeout": DEFAULT_CLAIM_TIMEOUT,
         "namespace": target_namespace,
         "claimer": g.api_key,
+        "token": token,
         "lease_exp": t + DEFAULT_CLAIM_TIMEOUT,
         "worker_id": worker_id,
         "caps": worker_caps_normalized,
@@ -1251,10 +1259,11 @@ def claim():
         claimed_at=:now,
         claim_expires_at=:lease_exp,
         claimed_by=:claimer,
+        claim_token=:token,
         claim_attempts=claim_attempts+1
     WHERE id = (SELECT id FROM candidate)
       AND (status='open' OR (status='claimed' AND COALESCE(claim_expires_at, claimed_at + :timeout) < :now))
-    RETURNING id, namespace, goal, payload, claim_attempts, priority, target_worker, required_capability
+    RETURNING id, namespace, goal, payload, claim_attempts, priority, target_worker, required_capability, claim_token
     """
 
     try:
@@ -1277,6 +1286,7 @@ def claim():
             "priority": row["priority"],
             "target_worker": row["target_worker"],
             "required_capability": row["required_capability"],
+            "claim_token": row["claim_token"],
             "claim_timeout": DEFAULT_CLAIM_TIMEOUT,
         })
 
@@ -1308,6 +1318,10 @@ def extend_claim(iid):
         return api_error("invalid_payload", "JSON body must be an object.", 400)
     data = data or {}
 
+    claim_token = data.get("claim_token")
+    if not claim_token:
+        return api_error("invalid_request", "Missing claim_token.")
+
     seconds = safe_int(data.get("seconds"), DEFAULT_CLAIM_TIMEOUT, 10, 3600)
     db = get_db()
 
@@ -1319,12 +1333,13 @@ def extend_claim(iid):
             WHERE id = ?
               AND status = 'claimed'
               AND claimed_by = ?
+              AND claim_token = ?
               AND COALESCE(claim_expires_at, claimed_at + ?) > ?
-        """, (now() + seconds, iid, g.api_key, DEFAULT_CLAIM_TIMEOUT, now()))
+        """, (now() + seconds, iid, g.api_key, claim_token, DEFAULT_CLAIM_TIMEOUT, now()))
 
         if cur.rowcount == 0:
             db.rollback()
-            return api_error("not_found", "Intent not found or not owned by you.", 404)
+            return api_error("not_found", "Intent not found, not owned by you, or invalid claim_token.", 404)
 
         db.commit()
         return jsonify({"ok": True, "id": iid, "extended_by": seconds}), 200
@@ -1352,6 +1367,10 @@ def fail(iid):
         return api_error("invalid_payload", "JSON body must be an object.", 400)
     data = data or {}
 
+    claim_token = data.get("claim_token")
+    if not claim_token:
+        return api_error("invalid_request", "Missing claim_token.")
+
     error_text = str(data.get("error", "unknown")).strip()[:500]
     t = now()
 
@@ -1362,13 +1381,12 @@ def fail(iid):
             SELECT id, namespace, goal, payload, publisher, visibility,
                    claim_attempts, max_attempts, backoff_base
             FROM intents
-            WHERE id = ?
-              AND claimed_by = ? AND status = 'claimed'
-        """, (iid, g.api_key)).fetchone()
+            WHERE id = ? AND claimed_by = ? AND claim_token = ? AND status = 'claimed'
+        """, (iid, g.api_key, claim_token)).fetchone()
 
         if not row:
             db.rollback()
-            return api_error("not_found", "Intent not found.", 404)
+            return api_error("not_found", "Intent not found, not owned by you, or invalid claim_token.", 404)
 
         if row["claim_attempts"] >= row["max_attempts"]:
             db.execute("""
@@ -1376,9 +1394,9 @@ def fail(iid):
                 SET status = 'dead',
                     failed_at = ?,
                     last_error = ?,
-                    claimed_by = NULL,
                     claimed_at = NULL,
                     claim_expires_at = NULL,
+                    claim_token = NULL,
                     result = NULL,
                     result_type = NULL,
                     completed_at = NULL
@@ -1397,6 +1415,7 @@ def fail(iid):
                     claimed_by = NULL,
                     claimed_at = NULL,
                     claim_expires_at = NULL,
+                    claim_token = NULL,
                     result = NULL,
                     result_type = NULL,
                     completed_at = NULL
@@ -1432,6 +1451,10 @@ def fulfill(iid):
         return api_error("invalid_payload", "JSON body must be an object.", 400)
     data = data or {}
 
+    claim_token = data.get("claim_token")
+    if not claim_token:
+        return api_error("invalid_request", "Missing claim_token.")
+
     result_payload = data.get("result")
     result_type = str(data.get("result_type", "json"))
     result_text = None
@@ -1459,13 +1482,12 @@ def fulfill(iid):
         row = db.execute("""
             SELECT id
             FROM intents
-            WHERE id = ?
-              AND claimed_by = ? AND status = 'claimed'
-        """, (iid, g.api_key)).fetchone()
+            WHERE id = ? AND claimed_by = ? AND claim_token = ? AND status = 'claimed'
+        """, (iid, g.api_key, claim_token)).fetchone()
 
         if not row:
             db.rollback()
-            return api_error("not_found", "Intent not found.", 404)
+            return api_error("not_found", "Intent not found, not owned by you, or invalid claim_token.", 404)
 
         db.execute("""
             UPDATE intents
@@ -1473,6 +1495,7 @@ def fulfill(iid):
                 result = ?,
                 result_type = ?,
                 completed_at = ?,
+                claim_token = NULL,
                 last_error = NULL,
                 failed_at = NULL
             WHERE id = ?
@@ -1729,7 +1752,7 @@ def admin_intent_detail(iid):
 
     row = get_db().execute("""
         SELECT id, namespace, goal, payload, status, priority, target_worker, required_capability,
-               publisher, claimed_by, claim_attempts, max_attempts, backoff_base,
+               publisher, claimed_by, claim_token, claim_attempts, max_attempts, backoff_base,
                visibility, last_error, created_at, expires_at, run_at, claimed_at,
                claim_expires_at, failed_at, completed_at, result_type
         FROM intents
@@ -1771,9 +1794,9 @@ def admin_cancel_intent(iid):
             SET status='dead',
                 failed_at=?,
                 last_error='Cancelled by admin',
-                claimed_by=NULL,
                 claimed_at=NULL,
                 claim_expires_at=NULL,
+                claim_token=NULL,
                 result=NULL,
                 result_type=NULL,
                 completed_at=NULL
@@ -1823,6 +1846,7 @@ def admin_retry_intent(iid):
                 claimed_by=NULL,
                 claimed_at=NULL,
                 claim_expires_at=NULL,
+                claim_token=NULL,
                 last_error='Retried by admin',
                 failed_at=NULL,
                 result=NULL,

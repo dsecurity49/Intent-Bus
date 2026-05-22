@@ -1,4 +1,4 @@
-# 🛡️ Worker Security Standard (v1.0)
+#  Worker Security Standard (v1.0)
 
 ## Status
 
@@ -188,8 +188,8 @@ Workers SHOULD:
 
 Workers MUST:
 
-- Call `/fulfill/<id>` upon successful execution
-- Call `/fail/<id>` on execution failure
+- Call `/fulfill/<id>` upon successful execution, providing the ephemeral `claim_token`
+- Call `/fail/<id>` on execution failure, providing the ephemeral `claim_token`
 - Provide meaningful error messages
 - Avoid silent failures
 
@@ -279,8 +279,8 @@ A worker is considered **compliant** if it:
 - [ ] Avoids unsafe deserialization
 - [ ] Validates outbound URLs
 - [ ] Implements SSRF protections
-- [ ] Handles success via `/fulfill`
-- [ ] Handles errors via `/fail`
+- [ ] Handles success via `/fulfill` (using `claim_token`)
+- [ ] Handles errors via `/fail` (using `claim_token`)
 - [ ] Implements retry/backoff
 - [ ] Avoids logging secrets
 - [ ] Enforces timeouts

@@ -1,6 +1,6 @@
 # RFC: Intent Protocol
 
-## Version 2.0
+## Version 2.1
 
 ### Status
 
@@ -12,7 +12,7 @@ Dsecurity
 
 ### Date
 
-2026-05-10
+2026-05-20
 
 ---
 
@@ -28,6 +28,7 @@ The Intent Protocol defines a lightweight, HTTP-based job coordination system fo
 - Dead-letter queue
 - Result storage and polling
 - Optional cryptographic request authentication
+- **Cryptographic lock isolation via ephemeral claim tokens**
 
 The protocol is designed to operate without external infrastructure and is suitable for environments ranging from mobile devices to cloud servers.
 
@@ -45,16 +46,17 @@ The key words **MUST**, **SHOULD**, and **MAY** are to be interpreted as describ
 | Bus | The server implementing this protocol |
 | Dead Letter | An intent that has exhausted all retry attempts |
 | Namespace | A logical partition of intents within the bus |
+| Claim Token | An ephemeral cryptographic token required to mutate a claimed intent |
 
 ---
 
 ## 2. Overview
 
-The protocol operates over HTTP and defines a shared state machine for job execution. A publisher submits an intent. A worker claims it, executes it, and marks it complete or failed. On failure, the bus applies exponential backoff and retries the intent up to a configurable maximum. Intents that exhaust all attempts are moved to a dead-letter queue for inspection and manual retry.
+The protocol operates over HTTP and defines a shared state machine for job execution. A publisher submits an intent. A worker claims it, receives an ephemeral claim token, executes it, and marks it complete or failed using that token.
 
-The system is designed so that jobs are not silently lost during normal queue operation and execution is at-least-once.
+On failure, the bus applies exponential backoff and retries the intent up to a configurable maximum. Intents that exhaust all attempts are moved to a dead-letter queue for inspection and manual retry.
 
-Because delivery is at-least-once, workers MUST be idempotent. The same intent MAY be executed more than once due to retries, lease expiry, network failures, or lost responses.
+The system is designed so that jobs are not silently lost during normal queue operation and execution is at-least-once. Because delivery is at-least-once, workers MUST be idempotent. The same intent MAY be executed more than once due to retries, lease expiry, network failures, or lost responses.
 
 ---
 
@@ -67,7 +69,7 @@ An Intent MUST exist in one of the following states:
 | State | Description |
 |---|---|
 | `open` | Available for claiming |
-| `claimed` | Locked by a worker; has an active lease |
+| `claimed` | Locked by a worker; has an active lease and claim token |
 | `fulfilled` | Successfully completed (terminal) |
 | `dead` | Permanently failed; moved to dead-letter queue (terminal) |
 
@@ -77,10 +79,10 @@ Expired open intents are removed during cleanup and do not transition to `dead`.
 
 | From | To | Trigger |
 |---|---|---|
-| `open` | `claimed` | Worker claims the intent |
-| `claimed` | `fulfilled` | Worker calls `/fulfill/<id>` |
-| `claimed` | `open` | Worker calls `/fail/<id>` and `claim_attempts < max_attempts` |
-| `claimed` | `dead` | Worker calls `/fail/<id>` and `claim_attempts >= max_attempts` |
+| `open` | `claimed` | Worker claims the intent and receives a `claim_token` |
+| `claimed` | `fulfilled` | Worker calls `/fulfill/<id>` providing the valid `claim_token` |
+| `claimed` | `open` | Worker calls `/fail/<id>` with `claim_token` and `claim_attempts < max_attempts` |
+| `claimed` | `dead` | Worker calls `/fail/<id>` with `claim_token` and `claim_attempts >= max_attempts` |
 | `claimed` | `open` | Lease expires and `claim_attempts < max_attempts` |
 | `claimed` | `dead` | Lease expires and `claim_attempts >= max_attempts` |
 | `dead` | `open` | Admin calls `/admin/intents/<id>/retry` |
@@ -97,12 +99,12 @@ next_run = now + (backoff_base * (2 ^ claim_attempts)) + jitter
 ```
 
 Where `jitter` is a random value in `[0, 2)` seconds to prevent thundering herd.
-
 - A job MUST transition to `dead` when `claim_attempts >= max_attempts`.
+- **If a lease expires and the current `claim_attempts >= max_attempts`, the server MUST transition the intent directly to the `dead` state instead of requeuing it.**
 - Default `max_attempts`: 3
 - Default `backoff_base`: 5.0 seconds
 
-If a worker attempts to `/fail` or `/fulfill` an intent after its lease has expired and another worker has reclaimed it, the server MUST reject the operation.
+If a worker attempts to `/fail`, `/extend_claim`, or `/fulfill` an intent using a `claim_token` that has expired or been overwritten by a subsequent claim, the server MUST reject the operation with a `404 Not Found`.
 
 ---
 
@@ -131,6 +133,7 @@ If a worker attempts to `/fail` or `/fulfill` an intent after its lease has expi
 | `status` | string | Current state. |
 | `claim_attempts` | integer | Number of times the intent has been claimed. |
 | `claimed_by` | string | API key of the current claimer. |
+| `claim_token` | string | Ephemeral cryptographic lock required to mutate a claimed intent. |
 | `claimed_at` | float | Unix timestamp of the last claim. |
 | `claim_expires_at` | float | Unix timestamp when the current lease expires. |
 | `run_at` | float | Unix timestamp when the intent becomes claimable. |
@@ -195,13 +198,13 @@ BODY
 Rules:
 
 - `METHOD` MUST be uppercase
-- `BODY` MUST be the raw request body bytes
+- **`BODY` MUST be the exact, unmodified bytes transmitted over the network. Clients MUST NOT parse and re-serialize the payload before signing, as JSON formatting differences (e.g., whitespace, key ordering) will cause signature mismatches.**
 - Empty bodies MUST serialize as an empty string
 - Query parameters in `CANONICAL_PATH` MUST:
   - be sorted lexicographically by key
   - preserve repeated parameters
   - preserve blank values
-  - be percent-encoded according to RFC 3986
+  - **be strictly percent-encoded according to RFC 3986 (forward slashes `/` MUST be encoded as `%2F`)**
 - The resulting digest MUST be lowercase hexadecimal
 
 ### 5.3 Admin Authentication
@@ -219,9 +222,7 @@ There is no fallback from `X-Admin-Token` to `BUS_SECRET`. Regular client endpoi
 
 ### 6.1 Namespace Isolation
 
-All intents belong to a namespace. Workers MUST specify a namespace when claiming, defaulting to `default`.
-
-Intents MUST NOT cross namespace boundaries.
+All intents belong to a namespace. Workers MUST specify a namespace when claiming, defaulting to `default`. Intents MUST NOT cross namespace boundaries.
 
 ### 6.2 Visibility
 
@@ -230,9 +231,7 @@ Intents MUST NOT cross namespace boundaries.
 
 ### 6.3 Priority
 
-Intents are claimed in descending priority order (higher value = higher priority). Within the same priority, intents are ordered by `run_at` ascending, then `claim_attempts` ascending, then `created_at` ascending, then `id` ascending.
-
-Priority scheduling does not guarantee fairness.
+Intents are claimed in descending priority order (higher value = higher priority). Within the same priority, intents are ordered by `run_at` ascending, then `claim_attempts` ascending, then `created_at` ascending, then `id` ascending. Priority scheduling does not guarantee fairness.
 
 ### 6.4 Worker Targeting
 
@@ -257,7 +256,7 @@ Clients sending JSON request bodies SHOULD use `Content-Type: application/json`.
 No authentication required. Response `200 OK`:
 
 ```json
-{ "ok": true, "ts": 1234567890.0, "version": "7.6" }
+{ "ok": true, "ts": 1234567890.0, "version": "7.61" }
 ```
 
 ### 7.2 Create Intent
@@ -341,9 +340,7 @@ The server MUST atomically select and lock the highest-priority eligible intent.
 - `target_worker` matches (if set)
 - `required_capability` is satisfied (if set)
 
-Selection order: `priority DESC`, `run_at ASC`, `claim_attempts ASC`, `created_at ASC`, `id ASC`.
-
-Lease expiry does not require a background cleanup pass before an intent can be reclaimed; expired intents are eligible for immediate atomic selection.
+Selection order: `priority DESC`, `run_at ASC`, `claim_attempts ASC`, `created_at ASC`, `id ASC`. Lease expiry does not require a background cleanup pass before an intent can be reclaimed; expired intents are eligible for immediate atomic selection.
 
 #### Responses
 
@@ -364,6 +361,7 @@ Response body on `200`:
   "priority": 100,
   "target_worker": null,
   "required_capability": null,
+  "claim_token": "<16-byte-hex-string>",
   "claim_timeout": 60
 }
 ```
@@ -379,19 +377,22 @@ Extends the lease on a currently-held intent. Workers performing long-running ta
 #### Request
 
 ```json
-{ "seconds": 60 }
+{ 
+  "seconds": 60,
+  "claim_token": "<16-byte-hex-string>"
+}
 ```
 
-`seconds` MUST be between 10 and 3600.
+`seconds` MUST be between 10 and 3600. `claim_token` is strictly required.
 
 #### Responses
 
 | Code | Meaning |
 |---|---|
 | `200 OK` | Lease extended |
-| `404 Not Found` | Intent not found or not owned by caller |
+| `404 Not Found` | Intent not found, not owned by caller, or claim_token invalid/expired |
 
-A lease extension MUST fail if the existing lease has already expired. Workers MUST call `/claim` again to re-acquire the intent.
+A lease extension MUST fail if the existing lease has already expired. Workers MUST call `/claim` again to re-acquire the intent. **Workers receiving a `404 Not Found` during this operation MUST treat it as a permanent lease loss (the job was reclaimed or deleted) and MUST NOT retry the mutation.**
 
 ### 7.5 Fulfill Intent
 
@@ -403,19 +404,22 @@ Marks an intent as fulfilled. Optionally stores a result.
 
 ```json
 {
+  "claim_token": "<16-byte-hex-string>",
   "result": { "status": "sent" },
   "result_type": "json"
 }
 ```
 
-`result_type` MUST be `"json"` or `"text"`. If omitted, it defaults to `"json"` when a result is provided. Body is optional — calling with no body marks the intent fulfilled with no stored result.
+`claim_token` is strictly required. `result_type` MUST be `"json"` or `"text"`. If omitted, it defaults to `"json"` when a result is provided. Body is optional — calling with no body marks the intent fulfilled with no stored result.
 
 #### Responses
 
 | Code | Meaning |
 |---|---|
 | `200 OK` | Intent fulfilled |
-| `404 Not Found` | Not found or not the current claimer |
+| `404 Not Found` | Not found, not the current claimer, or claim_token invalid/expired |
+
+**Workers receiving a `404 Not Found` during this operation MUST treat it as a permanent lease loss (the job was reclaimed or deleted) and MUST NOT retry the mutation.**
 
 ### 7.6 Fail Intent
 
@@ -426,15 +430,22 @@ Explicitly fails a claimed intent. The bus applies backoff and requeues if attem
 #### Request
 
 ```json
-{ "error": "Connection timed out" }
+{ 
+  "claim_token": "<16-byte-hex-string>",
+  "error": "Connection timed out" 
+}
 ```
+
+`claim_token` is strictly required.
 
 #### Responses
 
 | Code | Meaning |
 |---|---|
 | `200 OK` | Processed |
-| `404 Not Found` | Not found or not the current claimer |
+| `404 Not Found` | Not found, not the current claimer, or claim_token invalid/expired |
+
+**Workers receiving a `404 Not Found` during this operation MUST treat it as a permanent lease loss (the job was reclaimed or deleted) and MUST NOT retry the mutation.**
 
 ### 7.7 Get Result
 
@@ -568,7 +579,9 @@ Runs the background cleanup pass immediately. Returns stats:
 
 **GET /metrics**
 
-Requires either a `Bearer <METRICS_TOKEN>` Authorization header or valid admin credentials (`X-Admin-Token` or HTTP Basic auth). Returns Prometheus-compatible text format:
+Requires either a `Bearer <METRICS_TOKEN>` Authorization header or valid admin credentials (`X-Admin-Token` or HTTP Basic auth).
+
+Returns Prometheus-compatible text format:
 
 ```text
 # HELP intent_bus_intents_total Total intents by status and namespace
@@ -638,6 +651,7 @@ Implementations MUST provide:
 
 - At-least-once delivery
 - Atomic job claiming
+- Cryptographically isolated claim locks
 - Retry with exponential backoff
 - Dead-letter archival after max attempts
 - Per-namespace and per-key isolation
@@ -677,6 +691,7 @@ The protocol does NOT guarantee:
 - `BUS_SECRET` MUST be kept secret and MUST NOT be the default `dev_secret` in production
 - HTTPS MUST be enforced in production (`BUS_ENFORCE_HTTPS=true` or proxy-level TLS)
 - Replay attacks are mitigated by Strict Auth (nonce + timestamp window)
+- Concurrency attacks are mitigated by ephemeral `claim_token` validation
 - Rate limiting: 60 requests/minute per tester key
 - Request body size limit: 8KB total per request
 - Open intent cap: 2000 open intents per tester key (the main `BUS_SECRET` key is exempt)
@@ -687,6 +702,7 @@ The protocol does NOT guarantee:
 
 ## 16. Implementation Notes
 
+- **SQLite version 3.35.0 or higher is STRICTLY REQUIRED to support the `UPDATE ... RETURNING` syntax necessary for atomic claiming.**
 - SQLite WAL mode is required; `journal_mode` must be set to `WAL`
 - Atomic claiming MUST use `BEGIN IMMEDIATE` with `UPDATE ... RETURNING`
 - Cleanup is lazy: triggered by request traffic, not a background thread
@@ -697,7 +713,7 @@ The protocol does NOT guarantee:
 
 ## 17. Versioning
 
-- Version: 2.0
+- Version: 2.1 (Server API v7.61)
 - Breaking changes MUST increment the major version
 - Additive changes SHOULD be backward-compatible
 - The current protocol version is advertised in the `X-Intent-Version` response header
@@ -711,6 +727,7 @@ An implementation is compliant if it:
 - Implements all required endpoints in Sections 7 and 8
 - Enforces authentication rules in Section 5
 - Maintains lifecycle and routing guarantees in Sections 3 and 6
+- Respects and requires `claim_token` verification on state mutations
 
 ---
 
