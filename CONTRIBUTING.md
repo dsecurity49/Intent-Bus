@@ -15,7 +15,7 @@ Intent Bus is built on several core principles.
 We are defining a protocol standard (the Intent Protocol), not just a Flask application.
 
 Any change to the server MUST consider:
-* Bash / CURL clients
+* Bash / curl clients
 * Official SDKs (Python)
 * Future language ports (Go, Rust, Node.js, etc.)
 * Backward compatibility for existing v2.x integrations
@@ -36,7 +36,7 @@ We explicitly avoid:
 * Background worker daemons
 
 We strongly prefer:
-* The Python Standard Library
+* The Python standard library
 * Native SQLite features (`WAL`, `RETURNING`)
 * Simple, inspectable, single-file logic
 
@@ -69,7 +69,7 @@ We prioritize reliability over performance.
 
 ---
 
-# 🔐 Security Disclosure
+# Security Disclosure
 
 If you discover a security vulnerability, **DO NOT open a public issue or pull request.**
 
@@ -103,16 +103,16 @@ Workers:
 * MUST tolerate retries and exponential backoff
 * MUST respect the `claim_timeout` lease window
 * SHOULD utilize capability routing (`X-Worker-Capabilities`) for specialized tasks
-* MUST report successful execution via `POST /fulfill/<id>`
-* MUST report failures via `POST /fail/<id>`
+* MUST report successful execution via `POST /fulfill/<id>` using the ephemeral `claim_token`
+* MUST report failures via `POST /fail/<id>` using the ephemeral `claim_token`
 
 ### Worker Security Rules
 
 Workers MUST explicitly avoid dangerous execution patterns such as:
 * `shell=True`
 * `eval()`
-* unsafe deserialization
-* unsandboxed command execution
+* Unsafe deserialization
+* Unsandboxed command execution
 
 See `WORKER_SECURITY.md` for additional guidance.
 
@@ -130,7 +130,7 @@ High-value contribution areas include:
 * OpenTelemetry instrumentation
 * Terminal dashboards and operational tooling
 * Typed models and stricter validation
-* Overall Developer Experience (DX)
+* Overall developer experience (DX)
 
 ---
 
@@ -253,7 +253,7 @@ Verify:
 * Replay attacks fail correctly
 * Rate limits trigger properly
 
-**Note:** The primary `BUS_SECRET` bypasses tester rate limits.
+> **Note:** The primary `BUS_SECRET` bypasses tester rate limits.
 
 To test rate limiting behavior, generate a tester key via:
 
@@ -266,7 +266,7 @@ POST /admin/generate_key
 # Pull Request Rules
 
 * **Focus:** One feature or fix per PR. Keep diffs small and reviewable.
-* **Style:** Follow PEP-8. Keep code clean and production-grade.
+* **Style:** Follow PEP 8. Keep code clean and production-grade.
 * **Dependencies:** Do NOT introduce external infrastructure or library dependencies without discussion first.
 * **Backward Compatibility:** Do NOT break existing API behavior.
 * **Protocol Changes:** Protocol-affecting changes MUST update `SPEC.md`.
@@ -303,6 +303,8 @@ Never commit:
 * Production secrets
 * SQLite database files
 * `.env` files containing credentials
+
+Add sensitive files to `.gitignore` before development.
 
 ---
 

@@ -30,12 +30,11 @@ No external brokers. Just a minimal Flask + SQLite core.
 
 1. A client **POSTs a job** to `/intent`
 2. Workers **poll `/claim`** for matching jobs
-3. One worker **atomically claims** the job (`BEGIN IMMEDIATE` + `UPDATE ... RETURNING`)
-4. Worker executes and calls `/fulfill`
+3. One worker **atomically claims** the job and receives a `claim_token`
+4. Worker executes and calls `/fulfill/<id>` with the `claim_token`
 5. If it crashes, the job is **requeued with exponential backoff** and retried up to `max_attempts` times before being archived to the **dead-letter queue**
 
 Claims are lease-based and automatically expire if a worker disappears before fulfillment.
-
 
 ```mermaid
 graph LR
@@ -111,12 +110,14 @@ pip install intent-bus
 export INTENT_API_KEY="your_key_here"
 ```
 
-**Publish a job:**
+### Publish a job
+
 ```bash
 intent-bus publish send_notification '{"instruction": "Hello"}' -n default
 ```
 
-**Run a worker from the terminal:**
+### Run a worker from the terminal
+
 ```bash
 intent-bus listen send_notification -n default -c notify
 ```
@@ -136,48 +137,50 @@ pip install intent-bus
 ```python
 from intent_bus import IntentClient
 
-# Use as a context manager for automatic connection pooling cleanup
 with IntentClient(api_key="your_key_here") as client:
     published = client.publish(
         goal="send_notification",
         payload={"instruction": "Hello from the cloud"},
-        idempotency_key="task_123",  # Prevents double-execution on retry
-        priority=500,               # Higher = claimed first (0–1000, default 100)
+        idempotency_key="task_123",
+        priority=500,
     )
+
     print(f"Published: {published.id}")
 ```
 
-**Job Visibility:**
+### Job Visibility
+
 - `private` *(default)* — only workers using the same API key as the publisher can claim this job
 - `public` — any authenticated worker in the same namespace can claim this job
 
-> ⚠️ **Public jobs can be claimed by any authenticated worker in the namespace.**
+> ⚠️ Public jobs can be claimed by any authenticated worker in the namespace.
 > Do not use `visibility="public"` for sensitive workloads unless every worker on your bus is trusted.
-
-**Priority:** Higher numbers are claimed first. Default is 100. Range is 0–1000.
 
 ### Run a worker
 
-`claim()` returns a `ClaimResponse[ClaimedIntent]`. Use `job.id` and `job.payload` in handlers.
+`claim()` returns a claimed intent model that includes a `claim_token`.
 
 ```python
 from intent_bus import IntentClient, WorkerRuntime
 
-def handler(payload):
-    # payload is the dict passed to publish()
-    print("Received:", payload.get("instruction"))
+def handler(job):
+    print("Received:", job.payload.get("instruction"))
 
-    # Return a dict for fulfillment; the SDK handles the /fulfill call
-    return {"result": "delivered", "result_type": "text"}
+    return {
+        "result": "delivered",
+        "result_type": "text",
+    }
 
 client = IntentClient(api_key="your_key_here")
 runtime = WorkerRuntime(client=client)
 
-# Resilient v2.0 loop with exponential backoff and jitter
-runtime.listen(goal="send_notification", handler=handler)
+runtime.listen(
+    goal="send_notification",
+    handler=handler,
+)
 ```
 
-> ⚠️ **Workers must be idempotent.**
+> ⚠️ Workers must be idempotent.
 > The same job may be delivered more than once if:
 >
 > - the worker crashes mid-execution
@@ -212,21 +215,23 @@ curl -X POST https://dsecurity.pythonanywhere.com/intent \
 ### Claim and fulfill
 
 ```bash
-# Claim (returns a JSON intent model in v2.0)
-curl -s -X POST "https://dsecurity.pythonanywhere.com/claim?goal=send_notification" \
+# Claim (returns a claim_token)
+curl -s -X POST \
+  "https://dsecurity.pythonanywhere.com/claim?goal=send_notification" \
   -H "X-API-KEY: your_key_here"
 
-# Fulfill (v2.0 requires result_type)
-curl -s -X POST "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
+# Fulfill using the returned claim_token
+curl -s -X POST \
+  "https://dsecurity.pythonanywhere.com/fulfill/<INTENT_ID>" \
   -H "Content-Type: application/json" \
   -H "X-API-KEY: your_key_here" \
-  -d '{"result":"done","result_type":"text"}'
+  -d '{"claim_token":"<TOKEN_FROM_CLAIM>","result":"done","result_type":"text"}'
 ```
 
 If a job isn't fulfilled within 60 seconds, it is automatically requeued with exponential backoff.
 
-> **Worker polling:** After a `204 No Content` (no jobs available), workers SHOULD wait for the `Retry-After` duration (default 1s).
-> Tight polling loops create unnecessary write pressure on SQLite under concurrency.
+> Workers SHOULD respect the `Retry-After` header after receiving `204 No Content`.
+> Tight polling loops create unnecessary SQLite write pressure under concurrency.
 
 ---
 
@@ -238,7 +243,7 @@ open ──► claimed ──► fulfilled
                 ▼
               open  (retry with backoff, if attempts remain)
                 │
-                ▼  (after max_attempts exhausted)
+                ▼
               dead ──► dead-letter queue
 ```
 
@@ -248,31 +253,26 @@ Dead letters can be inspected at `/admin/dead` and retried via `/admin/intents/<
 
 ## Smart Routing
 
-Two routing primitives that go beyond simple goal matching.
-
 ### Target a specific worker
-
-Send a job directly to one named machine — useful when a task must run on a particular device (a phone, a GPU node, a Pi with attached hardware).
 
 ```python
 client.publish(
     goal="run_backup",
     payload={"instruction": "/data"},
-    target_worker="termux-phone-1",   # only this worker can claim it
+    target_worker="termux-phone-1",
 )
 ```
 
-The worker declares its ID at claim time:
+Worker:
 
 ```bash
-curl -X POST "https://dsecurity.pythonanywhere.com/claim?goal=run_backup" \
+curl -X POST \
+  "https://dsecurity.pythonanywhere.com/claim?goal=run_backup" \
   -H "X-API-KEY: key" \
   -H "X-Worker-ID: termux-phone-1"
 ```
 
 ### Require a capability
-
-Route jobs to any worker that advertises the right capability — useful when you have a mixed fleet and only some workers can handle a given task.
 
 ```python
 client.publish(
@@ -282,16 +282,17 @@ client.publish(
 )
 ```
 
-Workers declare their capabilities at claim time:
+Worker:
 
 ```bash
-curl -X POST "https://dsecurity.pythonanywhere.com/claim" \
+curl -X POST \
+  "https://dsecurity.pythonanywhere.com/claim" \
   -H "X-API-KEY: key" \
   -H "X-Worker-Capabilities: whisper,ffmpeg,gpu"
 ```
 
 Both fields can be combined.
-A job with `target_worker` and `required_capability` must satisfy both conditions before any worker can claim it.
+A job with both `target_worker` and `required_capability` must satisfy both conditions before it can be claimed.
 
 ---
 
@@ -301,57 +302,55 @@ A job with `target_worker` and `required_capability` must satisfy both condition
 - Deploy to a **Raspberry Pi behind a firewall** without opening ports
 - Relay alerts to **Discord** from any script
 - Replace fragile cron pipelines with loosely coupled workers
-- Coordinate a **heterogeneous worker fleet** using capability matching
+- Coordinate a heterogeneous worker fleet using capability matching
 
 ---
 
 ## Features
 
-- **Reliable Delivery** — jobs retried with exponential backoff up to `max_attempts`
-- **Atomic Locking** — `BEGIN IMMEDIATE` + `RETURNING` prevents double-claiming
-- **Dead-Letter Queue** — exhausted jobs archived for inspection and one-click retry
-- **Priority Scheduling** — higher-priority intents always claimed before lower ones
-- **Namespace Isolation** — partition workloads across logical domains
-- **Worker Targeting** — route a job directly to a named worker
-- **Capability Matching** — require specific capabilities for specialized tasks
-- **Delayed Execution** — publish now, make claimable later with `delay`
-- **Result Storage** — workers store structured results (`json` / `text`); publishers poll `/result/<id>`
-- **Idempotency Keys** — safe publisher retries with no duplicate jobs
-- **Hybrid Visibility** — private by default, optionally open to the whole namespace
-- **Rate Limiting** — 60 req/min per API key
-- **Ephemeral KV Store** — `/set` and `/get` with configurable TTL
-- **Lazy Cleanup** — triggered by traffic, no background thread required
-- **Structured Observability** — Whitelist-filtered JSON logging, `duration_ms` tracking, and `X-Request-ID` tracing
-- **HMAC Signing** — optional replay-protected auth, handled by v2.0 SDK
-- **Admin Dashboard** — live queue stats and management at `/admin/dashboard`
-- **Prometheus Metrics** — `/metrics` with intent counts by status and namespace
+- **Reliable Delivery** — retries with exponential backoff
+- **Atomic Locking** — prevents double-claiming
+- **Cryptographic Claim Locks** — ephemeral `claim_token` ownership model
+- **Dead-Letter Queue** — failed jobs archived for inspection
+- **Priority Scheduling**
+- **Namespace Isolation**
+- **Worker Targeting**
+- **Capability Matching**
+- **Delayed Execution**
+- **Result Storage**
+- **Idempotency Keys**
+- **Optional HMAC Signing**
+- **Admin Dashboard**
+- **Prometheus Metrics**
+- **Ephemeral KV Store**
 
 ---
 
 ## Architecture Guarantees
 
 - Jobs are not silently discarded during normal queue operation
-- Only **one worker** can claim a job at a time
-- Workers can **crash safely** — jobs are requeued after lease expiry
-- Delivery is **at-least-once** — design workers to be idempotent
-- Dead intents are **archived**, not deleted
+- Only one worker can hold a valid lease at a time
+- Claim ownership is enforced cryptographically via ephemeral tokens
+- Workers can crash safely — jobs are requeued after lease expiry
+- Delivery is at-least-once
+- Dead intents are archived, not deleted
 
 ---
 
 ## ⚠️ Limitations
 
-- SQLite has **single-writer contention** under high concurrency
-- Best for **hundreds to low thousands of jobs per minute** with dozens of workers
-- Not a replacement for Kafka or RabbitMQ at scale
-- Upgrade path: swap SQLite for PostgreSQL — the change is isolated to `get_db()`
+- SQLite has single-writer contention under high concurrency
+- Best for hundreds to low thousands of jobs per minute
+- Not a replacement for Kafka or RabbitMQ at massive scale
+- PostgreSQL is the natural future upgrade path
 
 ---
 
 ## Setup
 
-### Option 1 — PythonAnywhere (Free tier)
+### Option 1 — PythonAnywhere
 
-**Requirement:** SQLite 3.35.0+ (for the atomic `RETURNING` clause)
+**Requirement:** SQLite 3.35.0+
 
 ```bash
 python -c "import sqlite3; print(sqlite3.sqlite_version)"
@@ -378,12 +377,12 @@ docker-compose up -d
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BUS_SECRET` | — | Main API key. **Required in production.** |
-| `BUS_ADMIN_SECRET` | — | Admin token. |
-| `DASHBOARD_PASSWORD` | — | Basic auth password for the admin dashboard. |
-| `BUS_DB_PATH` | `infrastructure.db` | Path to the SQLite database file. |
-| `BUS_REQUIRE_SIGNATURES` | `false` | Require HMAC signing on all client requests. |
-| `BUS_CLEANUP_INTERVAL_SECONDS` | `21600` | Seconds between automatic cleanup passes. |
+| `BUS_SECRET` | — | Main API key |
+| `BUS_ADMIN_SECRET` | — | Admin token |
+| `DASHBOARD_PASSWORD` | — | Dashboard password |
+| `BUS_DB_PATH` | `infrastructure.db` | SQLite DB path |
+| `BUS_REQUIRE_SIGNATURES` | `false` | Require HMAC auth |
+| `BUS_CLEANUP_INTERVAL_SECONDS` | `21600` | Cleanup interval |
 
 ---
 
@@ -392,13 +391,13 @@ docker-compose up -d
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | `POST` | `/intent` | API key | Publish a job |
-| `POST` | `/claim` | API key | Claim a job |
-| `POST` | `/fulfill/<id>` | API key | Mark job complete (v2.0 requires `result_type`) |
-| `POST` | `/fail/<id>` | API key | Fail a job (triggers retry or dead-lettering) |
-| `GET` | `/result/<id>` | API key | Get stored result and full status |
-| `POST` | `/set/<key>` | API key | Set a KV store entry with TTL |
-| `GET` | `/get/<key>` | API key | Get a KV store entry |
-| `POST` | `/admin/cleanup` | Admin | Run cleanup manually and return stats |
+| `POST` | `/claim` | API key | Claim a job and receive a `claim_token` |
+| `POST` | `/fulfill/<id>` | API key | Fulfill a claimed job using `claim_token` |
+| `POST` | `/fail/<id>` | API key | Fail a claimed job using `claim_token` |
+| `GET` | `/result/<id>` | API key | Get stored result and status |
+| `POST` | `/set/<key>` | API key | Set KV entry |
+| `GET` | `/get/<key>` | API key | Get KV entry |
+| `POST` | `/admin/cleanup` | Admin | Trigger cleanup |
 
 ---
 
@@ -406,16 +405,17 @@ docker-compose up -d
 
 I wanted to trigger scripts on my Android phone from a cloud server — without Firebase, open ports, or complex infrastructure.
 So I built a tiny job bus using Flask + SQLite.
-It worked. Then I kept going.
+
+Then it kept evolving.
 
 ---
 
 ## Contributors & Acknowledgements
 
-- **Zan (@ghostframe)** — Security auditing, responsible disclosure, and hardening patches for v7.6.
-- **Dhanush (@dsecurity49)** — Creator and lead maintainer.
+- **Zan (@ghostframe)** — Security auditing and hardening patches
+- **Dhanush (@dsecurity49)** — Creator and maintainer
 
-Interested in contributing? See [CONTRIBUTING.md](CONTRIBUTING.md).
+Interested in contributing? See `CONTRIBUTING.md`.
 
 ---
 
