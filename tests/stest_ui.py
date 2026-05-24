@@ -736,16 +736,14 @@ def cleanup_old_logs(days_old: int = 3) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        add_help=False, description="Intent Bus Real-World Stress Suite v2")
-    parser.add_argument("--help", action="help",
-                        help="Show this help message and exit")
+        description="Intent Bus Real-World Stress Suite v2")
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("-l", "--low", action="store_true",
                        help="Run low-intensity profile")
     group.add_argument("-m", "--medium", action="store_true",
                        help="Run medium-intensity profile")
-    group.add_argument("-h", "--high", action="store_true",
+    group.add_argument("-H", "--high-only", action="store_true",
                        help="Run high-intensity profile")
     group.add_argument("-a", "--all", action="store_true",
                        help="Run low -> medium -> high sequentially")
@@ -762,8 +760,14 @@ def main() -> None:
 
     goal_name = args.goal
 
-    phases_to_run = ["low", "medium", "high"] if args.all else [
-        k for k in ["low", "medium", "high"] if getattr(args, k)]
+    phases_to_run = ["low", "medium", "high"] if args.all else []
+    if not args.all:
+        if args.low:
+            phases_to_run.append("low")
+        if args.medium:
+            phases_to_run.append("medium")
+        if args.high_only:
+            phases_to_run.append("high")
     results: Dict[str, Dict[str, Any]] = {}
 
     try:
