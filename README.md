@@ -38,9 +38,10 @@ Claims are lease-based and automatically expire if a worker disappears before fu
 
 ```mermaid
 graph LR
-    A[Cloud Script <br/> PythonAnywhere] -->|POST /intent| B[Intent Bus <br/> Flask + SQLite]
-    B -->|claim + fulfill| C[Worker <br/> Termux / Linux / VPS]
-    C -->|execute task| D[📱 Phone / System Action]
+    A["Cloud Script <br/> PythonAnywhere"] -->|POST /intent| B["Intent Bus <br/> Flask + SQLite"]
+    B -->|claim + fulfill| C["Worker <br/> Termux / Linux / VPS"]
+    C -->|execute task| D["📱 Phone / System Action"]
+
 ```
 
 ---
