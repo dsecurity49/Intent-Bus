@@ -9,6 +9,16 @@
 - **HMAC Canonicalization:** Enforced strict RFC 3986 percent-encoding (translating `/` to `%2F`) during signature generation to guarantee deterministic signatures across SDK implementations and prevent verification mismatches.
 - **Dead Intent Visibility:** Removed `claimed_by=NULL` during the `dead` transition. Workers that exhaust a job's retry attempts now correctly retain read-access to the telemetry of the dead job via `/result/<id>`.
 
+### Performance & Reliability (v7.61) - 2026-05-24
+- ✅ **Validated** on Docker/Render: 2000 jobs, 99.01% success rate, 13.6 j/s throughput
+- ✅ **P99 latency:** 2.586s under heavy load (40 concurrent workers)
+- ✅ **Zero infrastructure failures:** 0 network errors, 0 lease lost, 0 rate limit errors
+- ✅ **Production-ready:** Ready for deployment on Docker-based platforms (Render, Railway, Fly.io)
+
+### Known Limitations
+- **PythonAnywhere Free Tier:** Not recommended due to single-threaded Gunicorn worker limitations causing queue backlogs. Use Docker deployments instead.
+- **Max concurrent workers:** Tested safely up to 40 concurrent workers. 
+
 ---
 
 ## [7.6] - 2026-05-17

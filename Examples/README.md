@@ -96,6 +96,29 @@ chmod +x worker.sh
 
 ---
 
+## Deployment Scenarios
+
+### Scenario 1: Termux + Docker Server
+Worker runs on Android/Termux, server on Render:
+
+```bash
+# Termux worker
+export BASE_URL="https://your-bus.render.com"
+export API_KEY_FILE="$HOME/.apikey"
+./worker.sh
+```
+
+### Scenario 2: Multi-Device Coordination
+Publish from the cloud, workers on multiple devices. All workers share one API key but advertise different capabilities via `X-Worker-Capabilities`.
+
+### Deployment Checklist
+- [ ] Set `BUS_SECRET` in `.env`
+- [ ] Set `BUS_ADMIN_SECRET` in `.env`
+- [ ] Set `DASHBOARD_PASSWORD` in `.env`
+- [ ] Deploy server via Docker
+- [ ] Test `/metrics` endpoint requires auth
+- [ ] Run stress test to validate throughput
+
 ## v7.61 Protocol Rules
 
 ### 1. Completion Requirement

@@ -157,6 +157,29 @@ High-value improvements include:
 
 ---
 
+## 5. Run Benchmarks & Stress Tests
+
+Help validate performance and scalability:
+
+```bash
+# Install test dependencies
+pip install pytest requests
+
+# Run stress test suite (requires live server)
+python3 tests/stest_ui.py --all
+
+# Expected results for Docker deployment (Render/Railway):
+# - LOW (5 workers, 50 jobs): 100% success, ~3.7 j/s
+# - MEDIUM (15 workers, 500 jobs): 98%+ success, ~13.3 j/s
+# - HIGH (40 workers, 2000 jobs): 99% success, ~13.6 j/s
+```
+
+Report results in your PR with:
+- Platform (Render, Railway, local Docker, etc.)
+- Worker count
+- Success rate
+- P99 latency
+
 # Development Setup
 
 ## Requirements

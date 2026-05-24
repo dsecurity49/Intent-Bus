@@ -314,6 +314,31 @@ API keys SHOULD contain at least 128 bits of entropy.
 
 ---
 
+# Deployment Security
+
+## Recommended Deployment
+**Use Docker on managed platforms** (Render, Railway, Fly.io) because:
+- Multi-threaded request handling prevents queue backlog
+- Containers isolate Intent Bus from the host system
+- Easier secret management via environment variables
+
+## Not Recommended: PythonAnywhere Free Tier
+Single-threaded Gunicorn workers cannot handle concurrent requests reliably:
+- Requests queue up and timeout
+- Clients experience false "server stalled" errors
+- Security validation still runs but latency becomes problematic
+
+**If using PythonAnywhere:** Upgrade to Eco tier ($5/mo minimum) for multi-threaded support.
+
+## Metrics Endpoint Security
+The `/metrics` endpoint requires authentication via a bearer token matching `BUS_METRICS_TOKEN` or admin credentials.
+
+```bash
+curl -H "Authorization: Bearer <BUS_METRICS_TOKEN>" \
+  https://your-bus.render.com/metrics
+```
+This endpoint exposes operational metrics and should **never be public**.
+
 # Known Limitations
 
 ## 1. Payload Exposure

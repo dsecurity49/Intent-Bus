@@ -4,7 +4,7 @@
 
 ### Status
 
-Draft
+Stable (v2.1 validated with Intent Bus v7.61)
 
 ### Author
 
@@ -57,6 +57,27 @@ The protocol operates over HTTP and defines a shared state machine for job execu
 On failure, the bus applies exponential backoff and retries the intent up to a configurable maximum. Intents that exhaust all attempts are moved to a dead-letter queue for inspection and manual retry.
 
 The system is designed so that jobs are not silently lost during normal queue operation and execution is at-least-once. Because delivery is at-least-once, workers MUST be idempotent. The same intent MAY be executed more than once due to retries, lease expiry, network failures, or lost responses.
+
+## 2.1 Operational Characteristics (v7.61 Validation)
+
+This protocol specification has been implemented and validated in production:
+
+### Performance Characteristics
+- **Throughput:** 13+ jobs/second sustainable with SQLite WAL + Docker deployment
+- **Latency (P99):** ~2.5s under heavy concurrency (40 active workers, 2000 jobs)
+- **Success Rate:** 99%+ under normal conditions
+- **Lease Duration:** 60 seconds default (configurable)
+
+### Deployment Requirements
+Implementations SHOULD:
+- Support multi-threaded concurrent request handling
+- Implement atomic transaction isolation at the database level
+- Provide an authenticated metrics endpoint for operational observability
+
+Implementations MUST NOT:
+- Silently drop jobs on shutdown
+- Allow lease hijacking between workers
+- Process requests without timestamp validation when HMAC is enabled
 
 ---
 

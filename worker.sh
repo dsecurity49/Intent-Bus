@@ -5,7 +5,7 @@ set -uo pipefail
 # Bash-focused but portable across Linux/macOS/Termux
 
 API_KEY_FILE="$HOME/.apikey"
-BASE_URL="${BASE_URL:-https://dsecurity.pythonanywhere.com}"
+BASE_URL="${BASE_URL:-https://your-bus.render.com}"
 
 GOAL="${GOAL:-generic_task}"
 NAMESPACE="${NAMESPACE:-default}"

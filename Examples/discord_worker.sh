@@ -10,7 +10,7 @@ set -uo pipefail
 # =========================================================
 
 API_KEY_FILE="${HOME}/.apikey"
-BASE_URL="${BASE_URL:-https://dsecurity.pythonanywhere.com}"
+BASE_URL="${BASE_URL:-https://your-bus.render.com}"
 
 GOAL="${GOAL:-discord_alert}"
 NAMESPACE="${NAMESPACE:-default}"
