@@ -432,7 +432,7 @@ Based on v7.61 testing:
 | `BUS_DB_PATH` | `infrastructure.db` | SQLite DB path |
 | `BUS_REQUIRE_SIGNATURES` | `false` | Require HMAC auth |
 | `BUS_CLEANUP_INTERVAL_SECONDS` | `21600` | Cleanup interval |
-| `BUS_TRUST_PROXY` | — | For Servers behind proxies - set'true'|
+| `BUS_TRUST_PROXY` | — | For Servers behind proxies; set to 'true'|
 ---
 
 ## API Reference
