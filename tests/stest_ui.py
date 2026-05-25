@@ -71,7 +71,15 @@ def get_api_key() -> str:
     return key
 
 
-API_KEY = get_api_key()
+# Lazy loading to avoid import-time failures
+_API_KEY_CACHE = None
+
+
+def ensure_api_key() -> str:
+    global _API_KEY_CACHE
+    if _API_KEY_CACHE is None:
+        _API_KEY_CACHE = get_api_key()
+    return _API_KEY_CACHE
 
 
 PROFILES: Dict[str, Dict[str, Any]] = {
@@ -399,7 +407,7 @@ def publisher_worker(
     pause_range: tuple[float, float],
     turbulence: float,
 ) -> None:
-    client = IntentClient(base_url=BASE_URL, api_key=API_KEY, timeout=30)
+    client = IntentClient(base_url=BASE_URL, api_key=ensure_api_key(), timeout=30)
 
     try:
         for i in range(jobs):
@@ -465,7 +473,7 @@ def runtime_worker(
     failure_chance: float,
     turbulence: float,
 ) -> None:
-    client = IntentClient(base_url=BASE_URL, api_key=API_KEY, timeout=60)
+    client = IntentClient(base_url=BASE_URL, api_key=ensure_api_key(), timeout=60)
     idle_backoff = 1.0
 
     try:
@@ -602,22 +610,25 @@ def run_profile(profile_name: str, config: Dict[str, Any], goal: str) -> Dict[st
                     config["network_turbulence"],
                 )
 
-            jobs_per_pub = max(1, config["jobs"] // config["publishers"])
-            publish_futures = [
-                pool.submit(
-                    publisher_worker,
-                    namespace,
-                    goal,
-                    jobs_per_pub,
-                    config["payload_kb"],
-                    metrics,
-                    logger,
-                    stop_event,
-                    config["publish_burst_pause"],
-                    config["network_turbulence"],
+            base = config["jobs"] // config["publishers"]
+            rem = config["jobs"] % config["publishers"]
+            publish_futures = []
+            for i in range(config["publishers"]):
+                jobs_for_this_pub = base + (1 if i < rem else 0)
+                publish_futures.append(
+                    pool.submit(
+                        publisher_worker,
+                        namespace,
+                        goal,
+                        jobs_for_this_pub,
+                        config["payload_kb"],
+                        metrics,
+                        logger,
+                        stop_event,
+                        config["publish_burst_pause"],
+                        config["network_turbulence"],
+                    )
                 )
-                for _ in range(config["publishers"])
-            ]
 
             try:
                 while not stop_event.is_set():

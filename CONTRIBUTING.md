@@ -169,9 +169,9 @@ pip install pytest requests
 python3 tests/stest_ui.py --all
 
 # Expected results for Docker deployment (Render/Railway):
-# - LOW (5 workers, 50 jobs): 100% success, ~3.7 j/s
-# - MEDIUM (15 workers, 500 jobs): 98%+ success, ~13.3 j/s
-# - HIGH (40 workers, 2000 jobs): 99% success, ~13.6 j/s
+# - LOW (5 workers, 50 jobs): 100% success, ~3.29 j/s, P99: ~0.594s
+# - MEDIUM (15 workers, 500 jobs): 99% success, ~11.8 j/s, P99: ~1.989s
+# - HIGH (40 workers, 2000 jobs): 99.01% success, ~13.6 j/s, P99: 2.586s (v7.61 validation, 2026-05-24)
 ```
 
 Report results in your PR with:

@@ -381,9 +381,9 @@ Recent stress tests on Docker/Render:
 |---|---:|---:|---:|---:|---:|
 | **Light** | 5 | 50 | 100.0% | 0.594s | 3.29 j/s |
 | **Medium** | 15 | 500 | 99.0% | 1.989s | 11.8 j/s |
-| **Heavy** | 40 | 2000 | 99.27% | 2.396s | 13.55 j/s |
+| **Heavy** (v7.61 validation) | 40 | 2000 | 99.01% | 2.586s | 13.6 j/s |
 
-Benchmark runs recorded:
+Benchmark runs recorded (v7.61 validation run, 2026-05-24):
 
 - 0 network errors
 - 0 lease lost
