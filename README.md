@@ -180,8 +180,15 @@ runtime.listen(
 )
 ```
 
-> Workers should be idempotent.
-> Delivery is at-least-once and retries may occur during crashes or ambiguous failures.
+>  Workers must be idempotent.
+> The same job may be delivered more than once if:
+>
+> - the worker crashes mid-execution
+> - the lease expires before `/fulfill` is called
+> - the network drops after the server marks the job fulfilled but before the response arrives
+> - the bus retries due to an ambiguous failure
+
+**SDK repo:** https://github.com/dsecurity49/Intent-Bus-sdk
 
 ---
 
