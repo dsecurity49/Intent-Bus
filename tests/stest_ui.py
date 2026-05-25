@@ -406,8 +406,9 @@ def publisher_worker(
     stop_event: threading.Event,
     pause_range: tuple[float, float],
     turbulence: float,
+    api_key: str,
 ) -> None:
-    client = IntentClient(base_url=BASE_URL, api_key=ensure_api_key(), timeout=30)
+    client = IntentClient(base_url=BASE_URL, api_key=api_key, timeout=30)
 
     try:
         for i in range(jobs):
@@ -472,8 +473,9 @@ def runtime_worker(
     tail_latency_range: tuple[float, float],
     failure_chance: float,
     turbulence: float,
+    api_key: str,
 ) -> None:
-    client = IntentClient(base_url=BASE_URL, api_key=ensure_api_key(), timeout=60)
+    client = IntentClient(base_url=BASE_URL, api_key=api_key, timeout=60)
     idle_backoff = 1.0
 
     try:
@@ -563,6 +565,8 @@ def run_profile(profile_name: str, config: Dict[str, Any], goal: str) -> Dict[st
         f"({config['publishers']} publishers, {config['workers']} workers, {config['jobs']} jobs)\n"
     )
 
+    api_key = ensure_api_key()
+
     metrics = Metrics()
     logger = DiagnosticsLogger(profile_name)
     stop_event = threading.Event()
@@ -608,6 +612,7 @@ def run_profile(profile_name: str, config: Dict[str, Any], goal: str) -> Dict[st
                     config["tail_latency_range"],
                     config["failure_chance"],
                     config["network_turbulence"],
+                    api_key,
                 )
 
             base = config["jobs"] // config["publishers"]
@@ -627,6 +632,7 @@ def run_profile(profile_name: str, config: Dict[str, Any], goal: str) -> Dict[st
                         stop_event,
                         config["publish_burst_pause"],
                         config["network_turbulence"],
+                        api_key,
                     )
                 )
 
