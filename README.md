@@ -387,6 +387,28 @@ Intent Bus has been tested under controlled workloads on Docker/Render:
 
 All tests: **0 network errors, 0 lease lost, 0 rate limit errors**
 
+## 📊 Performance & Stress Benchmarks
+
+Intent Bus is built for high-reliability under concurrent write loads. The following real-time latency timelines demonstrate how the Flask + SQLite WAL architecture scales across different concurrency profiles under a continuous stress-test harness.
+
+### 🔹 Low Profile (50 Jobs, 4 Workers)
+Ideal for light home automation or background tasks. Latency stays exceptionally low and tightly clustered.
+![Low Profile Performance](assets/benchmarks/intent_bus_timeline_low.png)
+
+### 🔹 Medium Profile (400 Jobs, 8 Workers)
+Simulating moderate concurrent queue activity. The variance band illustrates workers waiting gracefully for the SQLite WAL write-lock without dropping connections.
+![Medium Profile Performance](assets/benchmarks/intent_bus_timeline_medium.png)
+
+### 🔹 High Profile (1500 Jobs, 16 Workers)
+Maximum saturation test. Even under intense, sustained contention, the system hits an equilibrium state, maintaining a flat average execution line and zero network drops.
+![High Profile Performance](assets/benchmarks/intent_bus_timeline_high.png)
+
+### 🔹 Throughput graph
+![Throughput](assets/benchmarks/throughput.png)
+
+---
+
+
 ### Deployment Recommendations
 
 #### ✅ Recommended: Docker on Cloud Platform
