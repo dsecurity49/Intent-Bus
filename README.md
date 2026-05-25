@@ -67,6 +67,8 @@ graph LR
 This project is designed for low-to-medium traffic workloads.
 With Docker deployment, thousands of jobs per minute are achievable (tested at 13.6 jobs/sec under heavy load).
 See **Deployment Capacity & Performance** section for benchmarks.
+
+
 ---
 
 ## Authentication
