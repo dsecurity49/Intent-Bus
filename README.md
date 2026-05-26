@@ -1,19 +1,15 @@
-# Intent Bus
+# Intent Bus                                                                                                    
 
-[![PyPI version](https://badge.fury.io/py/intent-bus.svg)](https://badge.fury.io/py/intent-bus)
+[![PyPI version](https://badge.fury.io/py/intent-bus.svg)](https://badge.fury.io/py/intent-bus)                 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **Run code on any device from anywhere — using just HTTP.**
-
-Intent Bus is a zero-infrastructure job coordination system with retries, atomic locking, priority scheduling, and cross-device workers.
-
-Built for developers who want something lighter than Redis, RabbitMQ, or Firebase, but more reliable than cron.
+> **Run code on any device from anywhere — using just HTTP.**                                                   
+Intent Bus is a zero-infrastructure job coordination system with retries, atomic locking, priority scheduling, and cross-device workers.                                
+Built for developers who want something lighter than Redis, RabbitMQ, or Firebase, while still being more reliable than cron.
 
 •[Why I built this](https://dev.to/d_security/why-i-built-a-job-queue-with-sqlite-instead-of-redis-and-what-i-learned-4f05)
-•[Cross-device automation guide](https://dev.to/d_security/how-i-coordinate-scripts-across-devices-without-open-ports-firebase-or-a-vps-1ipi)
-
----
-
+•[Cross-device automation guide](https://dev.to/d_security/how-i-coordinate-scripts-across-devices-without-open-ports-firebase-or-a-vps-1ipi)                           
+---                                                     
 # What makes this different?
 
 - Trigger your **Android phone from a cloud server**
@@ -180,7 +176,7 @@ runtime.listen(
 )
 ```
 
->  Workers must be idempotent.
+> Workers must be idempotent.
 > The same job may be delivered more than once if:
 >
 > - the worker crashes mid-execution
@@ -370,26 +366,31 @@ cd Intent-Bus
 mkdir -p bus_data && chmod 755 bus_data
 docker-compose up -d
 ```
-
 ---
 
 # Deployment Capacity & Performance
 
-Recent stress tests on Docker/Render:
-
-| Configuration | Workers | Jobs | Success | P99 Latency | Throughput |
-|---|---:|---:|---:|---:|---:|
-| **Light** | 5 | 50 | 100.0% | 0.594s | 3.29 j/s |
-| **Medium** | 15 | 500 | 99.0% | 1.989s | 11.8 j/s |
-| **Heavy** (v7.61 validation) | 40 | 2000 | 99.01% | 2.586s | 13.6 j/s |
+| Profile | PythonAnywhere Free | Render (Docker) | Android 12 (Termux) |
+|---|---|---|---|
+| **Light** (5w, 50j) | ✅ Works | 100% / 3.72 j/s / P99 0.594s | 100% / 4.74 j/s / P99 0.314s |
+| **Medium** (15w, 500j) | ❌ 100% Network Errors | 99.5% / 13.27 j/s / P99 0.517s | 99.5% / 18.76 j/s / P99 2.028s |
+| **Heavy** (40w, 2000j) | ❌ Failed | 99.01% / 13.62 j/s / P99 2.586s | 99.07% / 28.04 j/s / P99 2.556s |
+| **Extreme** (100+w, 5000j) | ❌ Failed | Not tested | 98.89% / 18.52 j/s / P99 9.002s |
 
 Benchmark runs recorded (v7.61 validation run, 2026-05-24):
+
+> Android 12 phone running the server via Termux outperformed the Render free tier at Heavy load.
+> PythonAnywhere free tier is not recommended due to single-threaded request handling.
 
 - 0 network errors
 - 0 lease lost
 - 0 rate limit errors
 
 Higher concurrency increases tail latency, but the system remains stable under sustained contention.
+
+> Stress test running on Android 12 phone via Termux
+
+![Android Stress Test](assets/benchmarks/android_stress_test.png)
 
 ---
 
@@ -431,6 +432,13 @@ Deploy with Docker on:
 - Heroku
 
 Multi-threaded deployments handle concurrent worker polling more comfortably.
+
+## Surprisingly Viable
+
+The server has been stress-tested running directly on an
+**Android 12 phone via Termux**, sustaining 28 j/s at
+A+ grade under heavy load — outperforming a Render free
+tier container.
 
 ## Not Ideal
 

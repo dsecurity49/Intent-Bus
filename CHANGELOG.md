@@ -7,21 +7,27 @@
 
 ### Fixed
 - **HMAC Canonicalization:** Enforced strict RFC 3986 percent-encoding (translating `/` to `%2F`) during signature generation to guarantee deterministic signatures across SDK implementations and prevent verification mismatches.
-- **Dead Intent Visibility:** Removed `claimed_by=NULL` during the `dead` transition. Workers that exhaust a job's retry attempts now correctly retain read-access to the telemetry of the dead job via `/result/<id>`.
+- **Dead Intent Visibility:** Dead intents now retain result visibility after retry exhaustion, so telemetry remains readable via `/result/<id>`.
+
+### Edge Performance Validated - 2026-05-26
+- ✅ **Validated on Android 12 (Termux):** Successfully hosted entirely on an Android phone using Termux, with the server running on mobile ARM CPU and flash storage.
+- ✅ **Heavy Load (Burst):** 28.04 j/s throughput with a 99.07% success rate and P99 latency of 2.556s (outperforming cloud container free tiers).
+- ✅ **Extreme Load (Sustained):** 5,000 jobs over 4.5 minutes. Maintained 18.52 j/s sustained throughput (bursting up to 36.7 j/s) with a 98.89% success rate before hitting hardware I/O limits.
+- ✅ **Zero architecture failures:** 0 network drops, 0 lease losses, 0 publish rejects, and graceful SQLite WAL degradation under massive hardware contention.
 
 ### Performance & Reliability (v7.61) - 2026-05-24
-- ✅ **Validated** on Docker/Render: 2000 jobs, 99.01% success rate, 13.6 j/s throughput
-- ✅ **P99 latency:** 2.586s under heavy load (40 concurrent workers)
-- ✅ **Zero infrastructure failures:** 0 network errors, 0 lease lost, 0 rate limit errors
-- ✅ **Production-ready:** Ready for deployment on Docker-based platforms (Render, Railway, Fly.io)
+- ✅ **Validated on Docker/Render:** 2000 jobs, 99.01% success rate, 13.6 j/s throughput.
+- ✅ **P99 latency:** 2.586s under heavy load (40 concurrent workers).
+- ✅ **Zero infrastructure failures:** 0 network errors, 0 lease losses, 0 rate limit errors.
+- ✅ **Deployment Validated:** Validated for deployment on Docker-based platforms (Render, Railway, Fly.io).
 
 ### Known Limitations
 - **PythonAnywhere Free Tier:** Not recommended due to single-threaded Gunicorn worker limitations causing queue backlogs. Use Docker deployments instead.
-- **Max concurrent workers:** Tested safely up to 40 concurrent workers. 
+- **Max concurrent workers:** Tested safely up to 40 concurrent workers.
 
 ---
 
-## [7.6] - 2026-05-17
+## [7.60] - 2026-05-17
 
 ### Security
 - **Queue Exhaustion Armor:** Publisher quota limits now evaluate both `open` and `claimed` states to prevent malicious workers from hoarding jobs and bypassing limits.
