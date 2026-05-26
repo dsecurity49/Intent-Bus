@@ -1,7 +1,6 @@
 # Intent Bus                                                                                                    
 
-[![PyPI version](https://badge.fury.io/py/intent-bus.svg)](https://badge.fury.io/py/intent-bus)                 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI version](https://badge.fury.io/py/intent-bus.svg)](https://badge.fury.io/py/intent-bus) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **Run code on any device from anywhere — using just HTTP.**                                                   
 Intent Bus is a zero-infrastructure job coordination system with retries, atomic locking, priority scheduling, and cross-device workers.                                
