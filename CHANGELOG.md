@@ -23,7 +23,7 @@
 
 ### Known Limitations
 - **PythonAnywhere Free Tier:** Not recommended due to single-threaded Gunicorn worker limitations causing queue backlogs. Use Docker deployments instead.
-- **Max concurrent workers:** Tested safely up to 40 concurrent workers.
+- **Max concurrent workers:** Regular testing validated stability up to 40 concurrent workers; Extreme Load test at 100+w achieved 98.89% success.
 
 ---
 
