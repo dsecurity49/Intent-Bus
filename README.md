@@ -1,4 +1,4 @@
-# Intent Bus                                                                                                    
+# Intent Bus                                
 
 [![PyPI version](https://badge.fury.io/py/intent-bus.svg)](https://badge.fury.io/py/intent-bus) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
