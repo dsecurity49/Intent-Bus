@@ -50,7 +50,7 @@ from intent_bus import (
 )
 
 
-BASE_URL = "https://intent-bus.onrender.com/"
+BASE_URL = os.environ.get("BASE_URL", "https://intent-bus.onrender.com/")
 DEFAULT_GOAL = "stress_capacity"
 
 
