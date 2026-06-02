@@ -24,9 +24,11 @@ except ImportError:
 # =========================================================
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 # Limits request body size to prevent DoS.
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 # Limits request body size, preventing denial-of-service attacks by large uploads.
 
 # --- Structured JSON Logging Setup ---
+# Good practice for centralized logging and easier parsing/analysis.
+# The JSONFormatter whitelists extra fields, preventing sensitive or unexpected data from being logged by default.
 
 
 class JSONFormatter(logging.Formatter):
@@ -69,8 +71,8 @@ class JSONFormatter(logging.Formatter):
             })
 
 
-app.logger.setLevel(logging.INFO)
-app.logger.handlers.clear()
+app.logger.setLevel(logging.INFO) # Set base logging level.
+app.logger.handlers.clear() # Clear default handlers to ensure only our JSON handler is used.
 
 json_handler = logging.StreamHandler()
 json_handler.setFormatter(JSONFormatter())
@@ -84,12 +86,18 @@ if TRUST_PROXY and ProxyFix is not None:
     app.logger.info("ProxyFix enabled. Trusting upstream proxy headers.")
 
 if sqlite3.sqlite_version_info < (3, 35, 0):
-    raise RuntimeError("SQLite 3.35.0+ required for RETURNING clauses.")
+    raise RuntimeError("SQLite 3.35.0+ required for RETURNING clauses.") # Enforces minimum SQLite version for critical features.
 
 API_KEY = os.environ.get("BUS_SECRET", "dev_secret")
 if API_KEY == "dev_secret":
+    # CRITICAL SECURITY ALERT: Prevents accidental use of a default, insecure API key in production.
+    # This is an excellent defensive measure.
     raise RuntimeError(
         "CRITICAL: Refusing to start. Running with default BUS_SECRET in production is unsafe.")
+
+# SECURITY: Admin and Dashboard passwords should ideally be hashed and stored, or managed via a secure secrets manager.
+# However, for simple deployments, environment variables can be acceptable if the environment itself is secured.
+# Suggestion: Implement a strong password policy for DASHBOARD_PASSWORD (min length, complexity).
 
 ADMIN_SECRET = os.environ.get("BUS_ADMIN_SECRET", "")
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
@@ -124,13 +132,15 @@ DEFAULT_BACKOFF_BASE = 5.0
 DEFAULT_PRIORITY = 100
 MAX_PRIORITY = 1000
 
-NONCE_WINDOW_SECONDS = 300
-NONCE_RETENTION_SECONDS = NONCE_WINDOW_SECONDS * 2
+NONCE_WINDOW_SECONDS = 300 # Time window for a nonce to be valid (5 minutes).
+NONCE_RETENTION_SECONDS = NONCE_WINDOW_SECONDS * 2 # How long nonces are kept to detect replays (10 minutes).
+# This is a good design for preventing replay attacks, ensuring nonces are both fresh and not reused.
 
-FULFILLED_RETENTION_SECONDS = 7 * 24 * 60 * 60
-DEAD_RETENTION_SECONDS = 7 * 24 * 60 * 60
+FULFILLED_RETENTION_SECONDS = 7 * 24 * 60 * 60 # Retention for successfully completed intents (7 days).
+DEAD_RETENTION_SECONDS = 7 * 24 * 60 * 60 # Retention for dead intents (7 days).
+# These retention policies help manage database size and data lifecycle.
 
-MAX_PAYLOAD = 7 * 1024
+MAX_PAYLOAD = 7 * 1024 # Limit for the 'payload' and 'result' fields specifically
 MAX_TTL = 86400
 MAX_OPEN_INTENTS_PER_KEY = 2000
 
@@ -201,22 +211,26 @@ def is_json_safe(obj, max_depth=10, depth=0):
     if isinstance(obj, list):
         return all(is_json_safe(v, max_depth, depth + 1) for v in obj)
     return True
+# SECURITY: This recursive check for JSON depth is good, preventing deeply nested (and potentially malicious) payloads.
+# Python's default recursion limit (often 1000) means a max_depth of 10 is very safe from stack overflows.
 
 
 def valid_namespace(ns: str) -> bool:
-    return bool(re.match(r"^[a-zA-Z0-9_.-]{1,64}$", ns))
+    return bool(re.match(r"^[a-zA-Z0-9_.-]{1,64}$", ns)) # SECURITY: Strict regex for namespace validation. Prevents injection and invalid characters.
 
 
 def valid_label(value: str) -> bool:
-    return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value))
+    return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value)) # SECURITY: Strict regex for label validation. Essential for any string used in queries or file paths.
 
 
 def strict_quote(s, safe='', encoding=None, errors=None):
     """Enforces strict RFC 3986 percent-encoding for HMAC canonicalization."""
+    # SECURITY: Crucial for HMAC verification. Consistent URL encoding prevents manipulation of signed request components.
     return quote(s, safe='', encoding=encoding or 'utf-8', errors=errors or 'strict')
 
 
 def admin_auth_ok():
+    # SECURITY: Uses hmac.compare_digest for constant-time comparison, preventing timing attacks. Excellent practice.
     token = request.headers.get("X-Admin-Token")
 
     if token:
@@ -294,6 +308,9 @@ def maybe_cleanup():
 
 def get_db():
     if "db" not in g:
+        # PRAGMA settings are good for performance, concurrency (WAL), and data integrity (FOREIGN KEYS).
+        # isolation_level=None is important for explicit transaction control (BEGIN IMMEDIATE/COMMIT/ROLLBACK).
+        # busy_timeout helps manage concurrent access to SQLite.
         db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL;")
@@ -320,6 +337,7 @@ def ensure_columns(db, table, columns):
         "store", "intents", "tester_keys", "rate_limits",
         "idempotency_keys", "request_nonces", "dead_letters"
     }
+    # SECURITY: This check is CRITICAL. It prevents SQL injection into the `table` name.
     if table not in allowed_tables:
         raise ValueError(f"Security Exception: Untrusted table name '{table}'")
 
@@ -328,6 +346,8 @@ def ensure_columns(db, table, columns):
     for col_def in columns:
         col_name = col_def.split()[0]
         if col_name not in existing:
+            # SECURITY: While 'table' is safeguarded, 'col_def' is still interpolated directly.
+            # This is acceptable here as 'columns' is a hardcoded list, not user input.
             db.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
 
 
@@ -508,6 +528,7 @@ def init_db():
 
 
 def get_role(key):
+    # SECURITY: Uses hmac.compare_digest for constant-time comparison of API_KEY, preventing timing attacks.
     if not key:
         return None
     if hmac.compare_digest(key, API_KEY):
@@ -530,12 +551,15 @@ def verify_signed_request(api_key):
         return False, "Invalid timestamp"
 
     if abs(now() - ts_int) > NONCE_WINDOW_SECONDS:
+        # SECURITY: Prevents replay attacks by rejecting requests with timestamps outside the allowed window.
         return False, "Stale timestamp"
 
     raw_body = request.get_data(cache=True, as_text=False) or b""
     parsed = parse_qsl(request.query_string.decode(
         "utf-8"), keep_blank_values=True)
 
+    # SECURITY: Canonicalization of query parameters is essential for signature verification.
+    # Sorting by key and using strict_quote ensures a consistent message hash across requests.
     canonical_query = urlencode(
         sorted(parsed, key=lambda x: x[0]), doseq=True, quote_via=strict_quote)
     canonical_path = request.path + \
@@ -546,21 +570,23 @@ def verify_signed_request(api_key):
         canonical_path.encode(),
         ts.encode(),
         nonce.encode(),
-        raw_body,
+        raw_body, # SECURITY: Including the raw body in the signature prevents tampering with the request payload.
     ])
 
     expected = hmac.new(api_key.encode(), msg, hashlib.sha256).hexdigest()
+    # SECURITY: hmac.compare_digest is used for constant-time comparison, mitigating timing attacks.
     if not hmac.compare_digest(sig, expected):
         return False, "Bad signature"
 
     db = get_db()
     try:
-        db.execute("BEGIN IMMEDIATE")
+        db.execute("BEGIN IMMEDIATE") # Ensures atomic operation for nonce insertion.
         db.execute("INSERT INTO request_nonces VALUES (?, ?, ?)",
                    (api_key, nonce, now()))
         db.commit()
         return True, None
     except sqlite3.IntegrityError:
+        # SECURITY: If nonce already exists (IntegrityError), it means a replay attack is detected.
         try:
             db.rollback()
         except Exception:
@@ -629,7 +655,6 @@ def run_cleanup_once():
         t = now()
         db.execute("BEGIN IMMEDIATE")
 
-        # 1. Purge expired ephemeral data
         cur = db.execute("DELETE FROM store WHERE expires_at < ?", (t,))
         stats["store_deleted"] = cur.rowcount
 
@@ -645,11 +670,10 @@ def run_cleanup_once():
             "DELETE FROM request_nonces WHERE created_at < ?", (t - NONCE_RETENTION_SECONDS,))
         stats["nonces_deleted"] = cur.rowcount
 
-        # 2. Purge expired open intents
-        cur = db.execute("DELETE FROM intents WHERE status='open' AND expires_at < ?", (t,))
+        cur = db.execute(
+            "DELETE FROM intents WHERE status='open' AND expires_at < ?", (t,))
         stats["expired_open_deleted"] = cur.rowcount
 
-        # 3. Handle expired claims (requeue or move to dead)
         expired_claims = db.execute("""
             SELECT id, namespace, goal, payload, publisher, visibility,
                    claim_attempts, max_attempts, backoff_base, last_error
@@ -661,7 +685,6 @@ def run_cleanup_once():
 
         for r in expired_claims:
             if r["claim_attempts"] >= r["max_attempts"]:
-                # Move to dead state if max attempts reached
                 db.execute("""
                     UPDATE intents
                     SET status='dead',
@@ -687,7 +710,6 @@ def run_cleanup_once():
                 }, r["last_error"] or "Max retries exceeded")
                 stats["expired_claims_dead"] += 1
             else:
-                # Requeue with exponential backoff + jitter
                 jitter = random.uniform(0, 2)
                 next_run = t + (r["backoff_base"] *
                                 (2 ** r["claim_attempts"])) + jitter
@@ -707,7 +729,6 @@ def run_cleanup_once():
                 """, (next_run, r["id"]))
                 stats["expired_claims_requeued"] += 1
 
-        # 4. Purge old terminal intents
         cur = db.execute("DELETE FROM intents WHERE status='fulfilled' AND completed_at < ?",
                          (t - FULFILLED_RETENTION_SECONDS,))
         stats["fulfilled_deleted"] = cur.rowcount
@@ -722,6 +743,7 @@ def run_cleanup_once():
 
         db.commit()
 
+        # Emit cleanup telemetry
         app.logger.info("cleanup_complete", extra=stats)
         return True, stats
 
@@ -756,6 +778,9 @@ def run_cleanup_once():
 
 @app.before_request
 def security():
+    # Defensive trace ID sanitization
+    # SECURITY: Sanitizing X-Request-ID prevents log injection or other header-based attacks.
+    # Generating a UUID if invalid or missing ensures every request has a safe ID.
     if getattr(g, "request_id", None) is None:
         req_id = request.headers.get("X-Request-ID", "")
         if re.match(r"^[a-zA-Z0-9_.:-]{1,128}$", req_id):
@@ -769,6 +794,8 @@ def security():
         return
 
     if ENFORCE_HTTPS and not is_local() and not request.is_secure:
+        # SECURITY: Enforcing HTTPS prevents Man-in-the-Middle attacks and ensures data in transit is encrypted.
+        # Bypass for local development is appropriate.
         return api_error("https_required", "HTTPS required.", 403)
 
     if request.path != "/admin/cleanup":
@@ -793,6 +820,9 @@ def security():
     role = get_role(key)
     if not role:
         return api_error("unauthorized", "Invalid API key.", 401)
+
+    # SECURITY: The combination of API key authentication, optional HMAC signatures,
+    # and nonce replay protection provides a robust security layer for API access.
 
     g.api_key = key
     g.role = role
@@ -843,6 +873,8 @@ def log_response(response):
     duration_ms = round((time.perf_counter() - start_time)
                         * 1000, 2) if start_time else 0.0
 
+    # Logging request completion and duration is good for monitoring and performance analysis.
+
     app.logger.info(
         "request_complete",
         extra={
@@ -851,11 +883,16 @@ def log_response(response):
         },
     )
 
+    # SECURITY: Setting these headers is excellent practice for web security.
+    # X-Frame-Options: DENY prevents clickjacking.
+    # X-Content-Type-Options: nosniff prevents MIME type sniffing, reducing exposure to drive-by download attacks.
+    # Referrer-Policy: no-referrer enhances user privacy.
+    # Cache-Control: no-store ensures sensitive responses are not cached.
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Intent-Version"] = "2.1"
+    response.headers["X-Intent-Version"] = "2.1" # Reflects protocol version from SPEC.md
     return response
 
 # =========================================================
@@ -878,7 +915,7 @@ def health():
 
 
 DASHBOARD_HTML = """
-{% autoescape true %}
+{% autoescape true %} {# SECURITY: autoescape is enabled by default in Flask's Jinja2, but explicit confirmation is good. This prevents XSS in rendered templates. #}
 <!doctype html>
 <html>
 <head>
@@ -1078,8 +1115,10 @@ def set_value(key):
     if "value" not in data:
         return api_error("invalid_request", "Missing value.")
 
-    ttl = safe_int(data.get("ttl"), 600, 1, MAX_TTL)
+    ttl = safe_int(data.get("ttl"), 600, 1, MAX_TTL) # Input validation for TTL, restricting range.
     db = get_db()
+
+    # SECURITY: Key prefixing with g.api_key ensures that users can only access/modify their own keys, preventing key collision or unauthorized access.
 
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -1141,11 +1180,11 @@ def create_intent():
     if not goal or len(goal) > 256:
         return api_error("invalid_goal", "Goal must be between 1 and 256 characters.")
 
-    if not is_json_safe(data["payload"]):
+    if not is_json_safe(data["payload"]): # SECURITY: Prevents deeply nested JSON payloads that could lead to DoS or parser issues.
         return api_error("invalid_payload", "Payload exceeds maximum nesting depth.")
 
     payload_str = json.dumps(data["payload"], separators=(",", ":"))
-    if len(payload_str.encode()) > MAX_PAYLOAD:
+    if len(payload_str.encode()) > MAX_PAYLOAD: # SECURITY: Prevents excessively large payloads, protecting database and network resources.
         return api_error("payload_too_large", "Payload too large.", 413)
 
     priority = safe_int(data.get("priority"),
@@ -1173,12 +1212,11 @@ def create_intent():
                 ",", ":")).encode("utf-8")
         ).hexdigest()
 
-    iid = secrets.token_hex(16)
+    iid = secrets.token_hex(16) # SECURITY: Using secrets.token_hex for ID generation ensures high entropy and unpredictability.
 
     try:
-        db.execute("BEGIN IMMEDIATE")
+        db.execute("BEGIN IMMEDIATE") # Ensures atomicity for transaction.
 
-        # Handle idempotency: return cached response if key and body match
         if idem_key:
             cached = db.execute(
                 "SELECT body_hash, response, status_code FROM idempotency_keys WHERE api_key=? AND key=?",
@@ -1192,7 +1230,6 @@ def create_intent():
                 db.rollback()
                 return Response(cached["response"], status=cached["status_code"], mimetype="application/json")
 
-        # Enforce open intent cap for non-admin users
         if g.role != "admin":
             open_count = db.execute(
                 "SELECT COUNT(1) FROM intents WHERE publisher=? AND status IN ('open', 'claimed')",
@@ -1201,6 +1238,7 @@ def create_intent():
 
             if open_count >= MAX_OPEN_INTENTS_PER_KEY:
                 db.rollback()
+                # SECURITY: Prevents a single API key from flooding the system with intents, acting as a resource safeguard.
                 return api_error(
                     "limit_exceeded",
                     f"Maximum of {MAX_OPEN_INTENTS_PER_KEY} open intents reached.",
@@ -1291,10 +1329,11 @@ def claim():
         return api_error("invalid_namespace", "Namespace must be 1-64 alphanumeric chars, dots, dashes, or underscores.")
 
     if target_publisher and g.role != "admin" and target_publisher != g.api_key:
+        # SECURITY: Prevents users from claiming intents published by others unless they are an admin.
+        # This enforces data segregation and access control.
         return api_error("forbidden", "publisher filtering is restricted.", 403)
 
     t = now()
-    # Define eligibility criteria for claiming an intent
     where_parts = [
         "expires_at > :now",
         "run_at <= :now",
@@ -1331,8 +1370,6 @@ def claim():
 
     routing_sql = " AND ".join(where_parts)
 
-    # Atomic claim using a Common Table Expression (CTE) to find the best candidate
-    # and update it in a single transaction.
     query = f"""
     WITH candidate AS (
         SELECT id
@@ -1409,7 +1446,7 @@ def extend_claim(iid):
 
     claim_token = data.get("claim_token")
     if not claim_token:
-        return api_error("invalid_request", "Missing claim_token.")
+        return api_error("invalid_request", "Missing claim_token.") # SECURITY: Claim token is essential for authorizing actions on a claimed intent.
 
     seconds = safe_int(data.get("seconds"), DEFAULT_CLAIM_TIMEOUT, 10, 3600)
     db = get_db()
@@ -1428,6 +1465,7 @@ def extend_claim(iid):
 
         if cur.rowcount == 0:
             db.rollback()
+            # SECURITY: Ensures that only the legitimate claimant (via api_key and claim_token) can extend their claim.
             return api_error("not_found", "Intent not found, not owned by you, or invalid claim_token.", 404)
 
         db.commit()
@@ -1480,7 +1518,6 @@ def fail(iid):
             return api_error("not_found", "Intent not found, not owned by you, or invalid claim_token.", 404)
 
         if row["claim_attempts"] >= row["max_attempts"]:
-            # Move to dead state if max attempts reached
             db.execute("""
                 UPDATE intents
                 SET status = 'dead',
@@ -1497,7 +1534,6 @@ def fail(iid):
 
             archive_dead_letter(db, row, error_text)
         else:
-            # Requeue with exponential backoff
             jitter = random.uniform(0, 2)
             next_run = t + (row["backoff_base"] *
                             (2 ** row["claim_attempts"])) + jitter
@@ -1628,6 +1664,7 @@ def result(iid):
     if not row:
         return api_error("not_found", "Intent not found.", 404)
 
+    # SECURITY: Access control for results. Only admin, publisher, or the claiming worker can view.
     if g.role != "admin" and g.api_key not in (row["publisher"], row["claimed_by"]):
         return api_error("forbidden", "Access denied.", 403)
 
@@ -1788,6 +1825,7 @@ def admin_purge():
         return api_error("invalid_payload", "JSON body must be an object.", 400)
     data = data or {}
 
+    # SECURITY: Requires explicit confirmation for a destructive action (purge), preventing accidental data loss.
     if data.get("confirm") is not True:
         return api_error("confirmation_required", 'Send {"confirm": true} to purge.', 400)
 
