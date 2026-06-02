@@ -24,7 +24,7 @@ except ImportError:
 # =========================================================
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 # Limit request body size to prevent DoS attacks via large uploads.
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024  # Limit request body size to prevent DoS attacks via large uploads.
 
 # --- Structured JSON Logging Setup ---
 # Whitelists extra fields to prevent sensitive or unexpected data from being logged.
@@ -85,7 +85,7 @@ if TRUST_PROXY and ProxyFix is not None:
     app.logger.info("ProxyFix enabled. Trusting upstream proxy headers.")
 
 if sqlite3.sqlite_version_info < (3, 35, 0):
-    raise RuntimeError("SQLite 3.35.0+ required for RETURNING clauses.") # Required for atomic claiming logic.
+    raise RuntimeError("SQLite 3.35.0+ required for RETURNING clauses.")  # Required for atomic claiming logic.
 
 API_KEY = os.environ.get("BUS_SECRET", "dev_secret")
 if API_KEY == "dev_secret":
@@ -126,13 +126,13 @@ DEFAULT_BACKOFF_BASE = 5.0
 DEFAULT_PRIORITY = 100
 MAX_PRIORITY = 1000
 
-NONCE_WINDOW_SECONDS = 300 # Valid window for a nonce to prevent replay attacks.
-NONCE_RETENTION_SECONDS = NONCE_WINDOW_SECONDS * 2 # Retention period for nonce tracking.
+NONCE_WINDOW_SECONDS = 300  # Valid window for a nonce to prevent replay attacks.
+NONCE_RETENTION_SECONDS = NONCE_WINDOW_SECONDS * 2  # Retention period for nonce tracking.
 
-FULFILLED_RETENTION_SECONDS = 7 * 24 * 60 * 60 # Retention for completed intents.
-DEAD_RETENTION_SECONDS = 7 * 24 * 60 * 60 # Retention for dead intents.
+FULFILLED_RETENTION_SECONDS = 7 * 24 * 60 * 60  # Retention for completed intents.
+DEAD_RETENTION_SECONDS = 7 * 24 * 60 * 60  # Retention for dead intents.
 
-MAX_PAYLOAD = 7 * 1024 # Max size for 'payload' and 'result' fields.
+MAX_PAYLOAD = 7 * 1024  # Max size for 'payload' and 'result' fields.
 MAX_TTL = 86400
 MAX_OPEN_INTENTS_PER_KEY = 2000
 
@@ -207,11 +207,11 @@ def is_json_safe(obj, max_depth=10, depth=0):
 
 
 def valid_namespace(ns: str) -> bool:
-    return bool(re.match(r"^[a-zA-Z0-9_.-]{1,64}$", ns)) # Validate namespace format to prevent injection.
+    return bool(re.match(r"^[a-zA-Z0-9_.-]{1,64}$", ns))  # Validate namespace format to prevent injection.
 
 
 def valid_label(value: str) -> bool:
-    return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value)) # Validate label format for safe query usage.
+    return bool(re.match(r"^[a-zA-Z0-9_.:-]{1,64}$", value))  # Validate label format for safe query usage.
 
 
 def strict_quote(s, safe='', encoding=None, errors=None):
@@ -299,7 +299,7 @@ def maybe_cleanup():
 
 def get_db():
     if "db" not in g:
-        # WAL mode for concurrency, synchronous=NORMAL for performance, 
+        # WAL mode for concurrency, synchronous=NORMAL for performance,
         # and isolation_level=None for explicit transaction control.
         db = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
@@ -557,7 +557,7 @@ def verify_signed_request(api_key):
         canonical_path.encode(),
         ts.encode(),
         nonce.encode(),
-        raw_body, # Include raw body to prevent payload tampering.
+        raw_body,  # Include raw body to prevent payload tampering.
     ])
 
     expected = hmac.new(api_key.encode(), msg, hashlib.sha256).hexdigest()
@@ -567,7 +567,7 @@ def verify_signed_request(api_key):
 
     db = get_db()
     try:
-        db.execute("BEGIN IMMEDIATE") # Atomic nonce insertion.
+        db.execute("BEGIN IMMEDIATE")  # Atomic nonce insertion.
         db.execute("INSERT INTO request_nonces VALUES (?, ?, ?)",
                    (api_key, nonce, now()))
         db.commit()
