@@ -83,6 +83,7 @@ def test_unauthorized_access(client):
 def test_publish_and_claim_lifecycle(client):
     headers = {"X-API-KEY": TEST_API_KEY}
 
+    # 1. Publish an intent
     pub_res = client.post(
         "/intent",
          headers=headers,
@@ -97,6 +98,7 @@ def test_publish_and_claim_lifecycle(client):
 
     intent_id = pub_res.json["id"]
 
+    # 2. Claim the intent
     claim_res = client.post(
         "/claim?goal=process_image&namespace=media",
         headers=headers,
@@ -110,6 +112,7 @@ def test_publish_and_claim_lifecycle(client):
 
     assert claim_token
 
+    # 3. Verify no other worker can claim it
     empty_claim = client.post(
         "/claim?goal=process_image&namespace=media",
         headers=headers,
@@ -117,6 +120,7 @@ def test_publish_and_claim_lifecycle(client):
 
     assert empty_claim.status_code == 204
 
+    # 4. Fulfill the intent using the claim token
     fulfill_res = client.post(
         f"/fulfill/{intent_id}",
         headers=headers,
@@ -153,6 +157,7 @@ def test_claim_token_required(client):
 
     assert claim_res.status_code == 200
 
+    # Attempt to fulfill without a claim_token
     fulfill_res = client.post(
         f"/fulfill/{intent_id}",
         headers=headers,
@@ -189,6 +194,7 @@ def test_invalid_claim_token_rejected(client):
 
     assert claim_res.status_code == 200
 
+    # Attempt to fulfill with a fake token
     fulfill_res = client.post(
         f"/fulfill/{intent_id}",
         headers=headers,
@@ -221,6 +227,7 @@ def test_idempotency_keys(client):
 
     assert res1.status_code == 201
 
+    # Second request with same key and body should return same ID
     res2 = client.post(
         "/intent",
         headers=headers,
@@ -230,6 +237,7 @@ def test_idempotency_keys(client):
     assert res2.status_code == 201
     assert res1.json["id"] == res2.json["id"]
 
+    # Request with same key but different body should be rejected
     modified_payload = {
         "goal": "test_idempotency",
         "payload": {"data": 2},

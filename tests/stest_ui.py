@@ -258,6 +258,7 @@ def calculate_score(snapshot: Dict[str, Any], elapsed: float) -> Dict[str, Any]:
         "unknown": f"{(snapshot['err_unknown'] / total_errs * 100):.1f}%" if total_errs else "0%",
     }
 
+    # Grade based on success rate, P95 latency, and lease stability
     grade = "F"
     if success_rate >= 99.0 and p95 < 2.0 and snapshot["err_lease_lost"] == 0:
         grade = "A+"
@@ -309,6 +310,7 @@ class LiveDashboard:
         self.ful_rate = 0.0
 
     def run(self) -> None:
+        # Hide cursor
         sys.stdout.write("\033[?25l")
         sys.stdout.flush()
         try:
@@ -316,6 +318,7 @@ class LiveDashboard:
                 self.draw()
                 time.sleep(0.5)
         finally:
+            # Restore cursor
             sys.stdout.write("\033[?25h")
             sys.stdout.flush()
 
@@ -324,6 +327,7 @@ class LiveDashboard:
         elapsed = now - self.start_time
         snap = self.metrics.snapshot()
 
+        # Calculate per-second rates every 1 second
         if now - self.last_rate_time >= 1.0:
             dt = now - self.last_rate_time
             self.pub_rate = (snap["published"] - self.last_pub) / dt
@@ -332,6 +336,7 @@ class LiveDashboard:
             self.last_ful = snap["fulfilled"]
             self.last_rate_time = now
 
+        # Log a progress snapshot every 5 seconds
         if now - self.last_tick_log >= 5.0:
             self.logger.log_event(
                 "progress_tick",
@@ -373,6 +378,7 @@ class LiveDashboard:
             "======================================================================",
         ]
 
+        # Clear screen and move cursor to top-left
         sys.stdout.write("\033[H\033[J")
         sys.stdout.write("\n".join(lines) + "\n")
         sys.stdout.flush()
