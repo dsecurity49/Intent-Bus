@@ -212,15 +212,16 @@ while true; do
         continue
     fi
 
-    # Extract HTTP code from curl output.
+    # Extract HTTP code from curl output (take only the final line to prevent spoofing).
     HTTP_CODE=$(printf "%s" "$RESPONSE" \
-        | grep "__HTTP_CODE__:" \
+        | tail -n1 \
+        | grep "^__HTTP_CODE__:" \
         | cut -d: -f2 \
         | tr -d '\r')
 
-    # Extract raw response (excluding HTTP code line).
+    # Extract raw response (excluding HTTP code line - remove last line to prevent spoofing).
     RAW_RESPONSE=$(printf "%s" "$RESPONSE" \
-        | sed '/__HTTP_CODE__/d')
+        | sed '$d')
 
     # -----------------------------------------------------
     # Handle 'No jobs available' (HTTP 204).

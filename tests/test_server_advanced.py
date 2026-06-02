@@ -1,7 +1,6 @@
 import os
 import tempfile
 import pytest
-import json
 import hmac
 import hashlib
 import time

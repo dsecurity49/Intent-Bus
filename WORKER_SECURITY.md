@@ -79,6 +79,7 @@ Workers **MUST** implement robust input validation:
 ### Required Fields
 
 -   The intent `id` **MUST** be present in the claimed job.
+-   The `claim_token` **MUST** be present in the claimed job and included in `/fulfill` and `/fail` requests. Server-side validation rejects missing tokens.
 -   All required payload fields for the worker's task **MUST NOT** be empty or missing.
 
 ### JSON Integrity

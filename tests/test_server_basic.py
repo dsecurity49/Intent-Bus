@@ -86,8 +86,8 @@ def test_publish_and_claim_lifecycle(client):
     # 1. Publish an intent
     pub_res = client.post(
         "/intent",
-         headers=headers,
-         json={
+        headers=headers,
+        json={
             "goal": "process_image",
             "payload": {"url": "http://example.com/image.png"},
             "namespace": "media",

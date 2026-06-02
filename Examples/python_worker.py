@@ -45,7 +45,6 @@ def validate_command(command: List[str]):
         raise ValueError(f"command '{executable}' is not allowed")
 
 
-
 def safe_execute(command_args: List[str], timeout: int = DEFAULT_TIMEOUT):
     """Execute a system command safely without shell=True."""
 
@@ -107,8 +106,6 @@ def handle_sys_command(payload, timeout_sec):
         "result": output,
         "result_type": "text"
     }
-
-
 
 
 def main():
