@@ -1,29 +1,30 @@
-name: "CodeQL Security Scan"
+name: "CodeQL Security Scan" # Name of the workflow
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master" ] # Trigger on push to main or master branches
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master" ] # Trigger on pull requests to main or master branches
   schedule:
+    # Schedule to run every Monday at midnight UTC
     - cron: '0 0 * * 1' # Runs every Monday automatically
 
 jobs:
-  analyze:
-    name: Analyze Python
-    runs-on: ubuntu-latest
+  analyze: # Define a job named 'analyze'
+    name: Analyze Python # Display name for the job
+    runs-on: ubuntu-latest # Specify the runner environment
     permissions:
-      security-events: write
-      contents: read
+      security-events: write # Grant permission to upload security analysis results
+      contents: read # Grant read permission to checkout repository content
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v4 # Action to checkout the repository code
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v3 # Action to initialize CodeQL for the specified languages
       with:
-        languages: python
+        languages: python # Configure CodeQL to analyze Python code
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v3 # Action to perform the actual CodeQL analysis

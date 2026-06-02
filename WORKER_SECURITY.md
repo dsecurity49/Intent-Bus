@@ -8,25 +8,29 @@ Stable
 
 ## Scope
 
-This document defines the **minimum security requirements** for all Intent Bus workers, including:
+# Defining Security Requirements for Intent Bus Workers
 
-- Bash workers
-- Python SDK workers
-- Third-party integrations
+This document defines the **minimum security requirements** that **all** Intent Bus workers **SHOULD** comply with. This includes:
 
-Any worker that interacts with the Intent Bus **SHOULD comply** with this standard.
+-   Bash workers
+-   Python SDK workers
+-   Any third-party integrations
+
+Adherence to this standard is crucial for maintaining the overall security posture of an Intent Bus deployment.
 
 ---
 
 ## 1. Threat Model
 
-Workers operate in an **untrusted-by-default environment**:
+# Understanding the Worker Environment
 
-- Payloads MAY be malformed or malicious
-- API keys MAY be leaked or misused
-- External endpoints MAY be attacker-controlled
-- Workers MAY run on sensitive systems (phones, servers)
-- Public intents (`visibility="public"`) originate from untrusted third parties
+Workers operate in an **untrusted-by-default environment**. This means that workers **MUST** assume potential malicious intent or accidental vulnerabilities in various aspects:
+
+-   **Payloads:** Incoming payloads **MAY** be malformed or explicitly malicious (e.g., attempting injection).
+-   **API Keys:** API keys **MAY** be leaked or misused, allowing unauthorized access.
+-   **External Endpoints:** External endpoints contacted by workers **MAY** be attacker-controlled or malicious.
+-   **System Exposure:** Workers **MAY** run on sensitive systems (e.g., personal phones, production servers) where compromise could have significant impact.
+-   **Public Intents:** Intents with `visibility="public"` originate from untrusted third parties and carry inherent risks.
 
 Therefore:
 
@@ -38,56 +42,56 @@ Therefore:
 
 ### 2.1 Least Privilege
 
-Workers SHOULD:
+Workers **SHOULD** operate with the principle of least privilege, minimizing potential harm if compromised:
 
-- Run with minimal OS permissions
-- Avoid root access unless strictly required
-- Restrict filesystem and network access
-- Explicitly advertise only the capabilities they safely support via `X-Worker-Capabilities`
+-   Run with minimal OS permissions (e.g., dedicated low-privilege user).
+-   Avoid root access unless strictly required for their function.
+-   Restrict filesystem and network access to only what is necessary.
+-   Explicitly advertise only the capabilities they safely support via `X-Worker-Capabilities`.
 
 ---
 
 ### 2.2 Explicit Trust Boundaries
 
-Workers MUST:
+Workers **MUST** establish and respect clear trust boundaries:
 
-- Validate all incoming payload fields
-- Reject incomplete or malformed data
-- Avoid assumptions about payload structure
-- Reject unknown action types by default
+-   Validate all incoming payload fields for type, format, and content.
+-   Reject incomplete or malformed data unequivocally.
+-   Avoid making assumptions about payload structure; validate dynamically.
+-   Reject unknown action types by default, implementing an allowlist approach.
 
 ---
 
 ### 2.3 Fail Closed
 
-On any unexpected condition:
+On encountering any unexpected or unsafe condition, workers **MUST** adopt a "fail-closed" approach:
 
-- Workers MUST fail safely
-- Workers MUST NOT execute partial or unsafe actions
-- Workers SHOULD reject unknown commands or unsupported capabilities
+-   Workers **MUST** fail safely, preventing further execution of potentially harmful operations.
+-   Workers **MUST NOT** execute partial or unsafe actions.
+-   Workers **SHOULD** reject unknown commands or unsupported capabilities.
 
 ---
 
 ## 3. Input Validation Requirements
 
-Workers MUST validate:
+Workers **MUST** implement robust input validation:
 
 ### Required Fields
 
-- `id` MUST be present
-- Required payload fields MUST NOT be empty
+-   The intent `id` **MUST** be present in the claimed job.
+-   All required payload fields for the worker's task **MUST NOT** be empty or missing.
 
 ### JSON Integrity
 
-- Payload MUST be valid JSON before parsing
+-   The payload **MUST** be valid JSON before any parsing or processing attempts.
 
 ### Type Safety
 
-- Fields MUST match expected types
+-   Payload fields **MUST** match their expected data types (e.g., integer, string, boolean).
 
-Workers SHOULD:
+Workers **SHOULD**:
 
-- Enforce maximum payload size limits
+-   Enforce maximum payload size limits to prevent resource exhaustion.
 
 ---
 
@@ -95,43 +99,43 @@ Workers SHOULD:
 
 ### 4.1 Command Execution (CRITICAL)
 
-Workers MUST NOT:
+This is a **CRITICAL** area for worker security. Workers **MUST NOT**:
 
-- Execute raw payload input directly
-- Use `shell=True`, `eval`, or equivalent with untrusted input
-- Dynamically import modules from payload data
-- Use unsafe deserialization mechanisms such as:
-  - Python `pickle`
-  - `yaml.load()` with unsafe loaders
+-   Execute raw payload input directly as a command.
+-   Use `shell=True`, `eval`, or equivalent functions with untrusted input (e.g., `subprocess.run(..., shell=True)`).
+-   Dynamically import modules based on payload data.
+-   Use unsafe deserialization mechanisms such as:
+    -   Python `pickle`
+    -   `yaml.load()` with unsafe loaders
 
-Workers SHOULD:
+Workers **SHOULD**:
 
-- Use strict allowlists for permitted actions
-- Use argument arrays instead of shell strings
+-   Use strict allowlists for permitted actions and commands.
+-   Use argument arrays (e.g., `["command", "arg1", "arg2"]`) instead of concatenated shell strings, as this prevents shell injection.
 
-#### ✅ Safe Example
+#### ✅ Safe Example (Bash)
 
 ```bash
-cmd=("uptime")
-"${cmd[@]}"
+cmd=("uptime") # Command and arguments as array elements
+"${cmd[@]}"    # Execute the array
 ```
 
-#### ❌ Unsafe Example
+#### ❌ Unsafe Example (Bash)
 
 ```bash
-eval "$USER_INPUT"
+eval "$USER_INPUT" # Directly executing user-provided string
 ```
 
 ---
 
 ### 4.2 Output Handling
 
-Workers SHOULD:
+Workers **SHOULD** carefully handle output generated by tasks:
 
-- Limit output size
-- Sanitize logs where necessary
-- Truncate excessively large output
-- Prevent memory exhaustion
+-   Limit output size to prevent resource exhaustion or log flooding.
+-   Sanitize logs where necessary to remove sensitive information or prevent log injection.
+-   Truncate excessively large output before storing or logging it.
+-   Prevent memory exhaustion from large outputs.
 
 ---
 
@@ -139,107 +143,108 @@ Workers SHOULD:
 
 ### 5.1 URL Validation (CRITICAL)
 
-Workers MUST validate outbound URLs.
+Workers **MUST** validate all outbound URLs before making network requests.
 
 #### Allowed
 
-- Explicitly allowlisted domains
+-   Only explicitly allowlisted domains.
 
 #### Forbidden
 
-- Arbitrary user-provided URLs
-- Internal network targets:
-  - `localhost`
-  - `127.0.0.1`
-  - `::1`
-  - `169.254.0.0/16`
-  - RFC1918 private IP ranges
+-   Arbitrary user-provided URLs.
+-   Internal network targets, including:
+    -   `localhost`
+    -   `127.0.0.1`
+    -   `::1` (IPv6 loopback)
+    -   `169.254.0.0/16` (Link-local addresses)
+    -   RFC1918 private IP ranges (e.g., `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
 
 ---
 
 ### 5.2 SSRF Protection
 
-Workers MUST:
+Workers **MUST** implement Server-Side Request Forgery (SSRF) protections:
 
-- Restrict protocols (`https://` only unless explicitly required)
-- Validate domain patterns
-- Resolve and verify IPs before connecting
-- Reject private/internal IP ranges
-- Protect against DNS rebinding attacks
+-   Restrict protocols (`https://` only unless explicitly required for a validated use case).
+-   Validate domain patterns using strong regular expressions or explicit lists.
+-   Resolve and verify IPs before connecting to ensure they are not private or internal.
+-   Reject private/internal IP ranges (see 5.1 Forbidden).
+-   Protect against DNS rebinding attacks by verifying the resolved IP.
 
 ---
 
 ## 6. Authentication Handling
 
-Workers MUST:
+Workers **MUST** handle authentication credentials with extreme care:
 
-- Store API keys securely (e.g. `~/.apikey`)
-- NEVER log API keys
-- NEVER expose keys in errors or responses
+-   Store API keys securely (e.g., in a file with `chmod 600` permissions, or a secrets manager, not hardcoded).
+-   **NEVER** log API keys to any output or log file.
+-   **NEVER** expose keys in error messages or API responses.
 
-Workers SHOULD:
+Workers **SHOULD**:
 
-- Use Strict Auth (HMAC) in production
-- Rotate API keys periodically
+-   Use Strict Auth (HMAC) in production environments for enhanced security.
+-   Rotate API keys periodically.
 
 ---
 
 ## 7. Lifecycle & Error Handling
 
-Workers MUST:
+Workers **MUST** correctly manage the intent lifecycle and report errors:
 
-- Call `/fulfill/<id>` upon successful execution, providing the ephemeral `claim_token`
-- Call `/fail/<id>` on execution failure, providing the ephemeral `claim_token`
-- Provide meaningful error messages
-- Avoid silent failures
+-   Call `/fulfill/<id>` upon successful execution, providing the ephemeral `claim_token`.
+-   Call `/fail/<id>` on execution failure, providing the ephemeral `claim_token`.
+-   Provide meaningful error messages when failing an intent.
+-   Avoid silent failures; every claimed job must have an explicit outcome reported.
 
-Workers SHOULD:
+Workers **SHOULD**:
 
-- Avoid leaking sensitive internal details in errors
+-   Avoid leaking sensitive internal details in error messages.
 
 ---
 
 ## 8. Rate Limiting & Backoff
 
-Workers SHOULD:
+Workers **SHOULD** implement responsible polling behavior:
 
-- Implement delay between polling requests
-- Use exponential backoff on repeated failures
-- Avoid tight retry loops
+-   Implement a delay between polling requests to avoid hammering the bus.
+-   Use exponential backoff on repeated failures or when receiving a `204 No Content` with a `Retry-After` header.
+-   Avoid tight retry loops that can overwhelm the bus or consume excessive resources.
 
 ---
 
 ## 9. Resource Limits
 
-Workers SHOULD enforce:
+Workers **SHOULD** enforce resource limits on their tasks:
 
-- Execution timeouts
-- Output size limits
-- Memory-safe operations
+-   Execution timeouts for commands or external calls.
+-   Output size limits for results to prevent large data being stored in the bus.
+-   Memory-safe operations to prevent resource exhaustion on the worker device.
 
-Workers MAY:
+Workers **MAY**:
 
-- Use OS-level limits (`ulimit`, cgroups, containers)
+-   Use OS-level limits (`ulimit`, cgroups, containers) for stricter resource governance.
 
 ---
 
 ## 10. Logging Guidelines
 
-Workers SHOULD log:
+Workers **SHOULD** adhere to secure logging practices:
 
-- Job ID
-- Execution status
-- Errors
+-   Log:
+    -   Job ID for traceability.
+    -   Execution status (start, success, failure).
+    -   Errors and exceptions.
 
-Workers SHOULD:
+Workers **SHOULD**:
 
-- Prefer structured logs where possible
-- Truncate oversized payloads or outputs before logging
+-   Prefer structured logs (e.g., JSON) where possible for easier parsing and analysis.
+-   Truncate oversized payloads or outputs before logging them.
 
-Workers MUST NOT:
+Workers **MUST NOT**:
 
-- Log API keys or secrets
-- Log sensitive payloads without sanitization
+-   Log API keys or secrets.
+-   Log sensitive payloads without prior sanitization or redaction.
 
 ---
 
@@ -247,79 +252,79 @@ Workers MUST NOT:
 
 ### 11.1 Safe Mode (Default)
 
-- Whitelisted actions only
-- Restricted external calls
-- Suitable for public/shared environments
+-   Only allowlisted actions are executed.
+-   External calls are restricted to validated targets.
+-   This mode is suitable for public/shared environments or when processing untrusted intents.
 
 ---
 
 ### 11.2 Power Mode (Restricted)
 
-- May execute arbitrary commands
-- MUST only be used:
-  - With trusted private intents
-  - In isolated environments
-  - Inside containers, VMs, or sandboxed systems where possible
+-   May execute arbitrary commands or perform less restricted operations.
+-   **MUST** only be used:
+    -   With trusted private intents.
+    -   In isolated environments (e.g., dedicated VMs, containers).
+    -   Inside containers, VMs, or sandboxed systems where possible.
 
-Workers operating in Power Mode MUST clearly document:
+Workers operating in Power Mode **MUST** clearly document this critical security implication:
 
-> ⚠️ **CRITICAL:** This worker executes arbitrary commands.  
-> It MUST NEVER claim public intents (`visibility="public"`).
+> ⚠️ **CRITICAL:** This worker executes arbitrary commands.
+> It **MUST NEVER** claim public intents (`visibility="public"`).
 
 ---
 
 ## 12. Compliance Checklist
 
-A worker is considered **compliant** if it:
+A worker is considered **compliant** with this security standard if it demonstrably meets these criteria:
 
-- [ ] Validates payload structure
-- [ ] Rejects unknown actions by default
-- [ ] Does NOT execute raw input
-- [ ] Uses safe command execution
-- [ ] Avoids unsafe deserialization
-- [ ] Validates outbound URLs
-- [ ] Implements SSRF protections
-- [ ] Handles success via `/fulfill` (using `claim_token`)
-- [ ] Handles errors via `/fail` (using `claim_token`)
-- [ ] Implements retry/backoff
-- [ ] Avoids logging secrets
-- [ ] Enforces timeouts
+-   [ ] Validates payload structure.
+-   [ ] Rejects unknown actions by default.
+-   [ ] Does **NOT** execute raw input from payloads.
+-   [ ] Uses safe command execution methods (e.g., argument arrays, no `shell=True`).
+-   [ ] Avoids unsafe deserialization (e.g., `pickle`).
+-   [ ] Validates outbound URLs to prevent arbitrary external calls.
+-   [ ] Implements SSRF protections.
+-   [ ] Handles success via `/fulfill` (using `claim_token`).
+-   [ ] Handles errors via `/fail` (using `claim_token`).
+-   [ ] Implements retry/backoff mechanisms.
+-   [ ] Avoids logging secrets.
+-   [ ] Enforces execution timeouts.
 
 ---
 
 ## 13. Non-Goals
 
-This standard does NOT guarantee:
+This standard does **NOT** aim to guarantee:
 
-- Complete system security
-- Protection from compromised API keys
-- Isolation from OS-level attacks
+-   Complete system security (it's a component of a larger system).
+-   Protection from compromised API keys (requires client-side security practices).
+-   Isolation from OS-level attacks (assumes host security).
 
 ---
 
 ## 14. Future Improvements
 
-Planned areas:
+Planned areas for enhancing worker security:
 
-- Worker sandboxing guidelines
-- Signed worker packages
-- Capability-based permission models
+-   Detailed worker sandboxing guidelines (e.g., seccomp profiles, AppArmor).
+-   Guidelines for signed worker packages to verify integrity.
+-   Capability-based permission models for fine-grained access control.
 
 ---
 
 ## 15. Summary
 
-Intent Bus workers are execution engines in a distributed system.
+Intent Bus workers are execution engines in a distributed system, and their security is paramount.
 
 Security is not optional.
 
 > A single unsafe worker can compromise an entire environment.
 
-Following this standard improves:
+Following this standard significantly improves:
 
-- Safer automation
-- Predictable behavior
-- Production readiness
+-   Safer automation.
+-   Predictable behavior.
+-   Production readiness.
 
 ---
 

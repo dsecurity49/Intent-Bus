@@ -1,57 +1,59 @@
 # =========================
-# Python
+# Python specific ignored files
 # =========================
-__pycache__/
-*.py[cod]
-*$py.class
+__pycache__/ # Compiled Python bytecode cache directory
+*.py[cod] # Compiled Python bytecode files
+*$py.class # Jython compiled class files
 
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-.eggs/
-*.egg
-*.dist
-
-# =========================
-# Virtual Environments
-# =========================
-.env
-.env.*
-!.env.example
-.venv
-env/
-venv/
-ENV/
+# Ignored files related to Python distribution and packaging
+build/ # Directory for build artifacts
+dist/ # Directory for distribution packages
+*.egg-info/ # Python egg metadata directories
+.eggs/ # Directory for Python eggs
+*.egg # Python egg files
+*.dist # Distribution archives
 
 # =========================
-# IDE / Editor
+# Ignored Virtual Environment directories
 # =========================
-.vscode/
-.idea/
-*.swp
-*.swo
+.env # Common .env file
+.env.* # Environment-specific .env files
+!.env.example # Keep .env.example (it's a template)
+.venv # Common virtual environment directory name
+env/ # Another common virtual environment directory name
+venv/ # Another common virtual environment directory name
+ENV/ # Another common virtual environment directory name
 
 # =========================
-# OS Files
+# Ignored IDE and Editor specific files
 # =========================
-.DS_Store
-Thumbs.db
+.vscode/ # VS Code specific settings
+.idea/ # IntelliJ IDEA specific settings
+*.swp # Vim swap files
+*.swo # Vim swap files
 
 # =========================
-# Logs
+# Ignored OS generated files
 # =========================
-*.log
-bus_logs.txt
+.DS_Store # macOS directory metadata
+Thumbs.db # Windows thumbnail cache
 
 # =========================
-# Intent Bus Runtime Data
+# Ignored log files
 # =========================
-infrastructure.db
-infrastructure.db-wal
-infrastructure.db-shm
-*-wal
-*-shm
+*.log # General log files
+bus_logs.txt # Specific log file for the Intent Bus worker
+
+# =========================
+# Ignored Intent Bus Runtime Data (SQLite files)
+# ===============================================
+# These files are typically generated at runtime by SQLite.
+# They should not be committed to version control.
+infrastructure.db # The main SQLite database file
+infrastructure.db-wal # SQLite Write-Ahead Log file
+infrastructure.db-shm # SQLite shared memory file
+*-wal # Wildcard for WAL files
+*-shm # Wildcard for SHM files
 
 # Avoid blanket DB ignores (safer for tests)
 # *.db
@@ -59,35 +61,36 @@ infrastructure.db-shm
 # *.sqlite3
 
 # =========================
-# Secrets (CRITICAL)
-# =========================
-.apikey
-.env.*
-*.pem
-*.key
-*.crt
-*.p12
-*.secrets
-.envrc
+# Ignored Secrets and sensitive files (CRITICAL)
+# ===============================================
+# These files contain sensitive information and MUST NOT be committed.
+.apikey # File containing the API key
+.env.* # All environment files (e.g., .env.production)
+*.pem # Private key files (e.g., SSL certificates)
+*.key # Private key files
+*.crt # Certificate files
+*.p12 # PKCS#12 archive files
+*.secrets # Files containing generic secrets
+.envrc # direnv environment setup file
 
 # =========================
-# Testing / Coverage
-# =========================
-.coverage
-htmlcov/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.tox/
+# Ignored Testing and Coverage related files
+# =========================================
+.coverage # Coverage.py data file
+htmlcov/ # HTML coverage report directory
+.pytest_cache/ # pytest cache directory
+.mypy_cache/ # MyPy static type checker cache
+.ruff_cache/ # Ruff linter cache
+.tox/ # tox test automation directory
 
 # =========================
-# Node (future-proofing)
-# =========================
-node_modules/
+# Node.js specific ignored files (future-proofing)
+# ===============================================
+node_modules/ # Node.js dependency directory
 
 # =========================
-# Misc
+# Miscellaneous ignored files
 # =========================
-*.tmp
-*.bak
-.aider*
+*.tmp # Temporary files
+*.bak # Backup files
+.aider* # Aider AI tool files
