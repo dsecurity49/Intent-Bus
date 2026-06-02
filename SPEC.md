@@ -136,7 +136,7 @@ If a worker attempts to `/fail`, `/extend_claim`, or `/fulfill` an intent using 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `goal` | string | required | The task type. 1–256 characters. |
-| `payload` | any | required | Arbitrary JSON value passed to the worker. |
+| `payload` | any | required | Arbitrary JSON value passed to the worker. Max 7KB (serialized UTF-8). |
 | `namespace` | string | `"default"` | Logical partition. Alphanumeric, `.`, `-`, `_`. Max 64 chars. |
 | `visibility` | string | `"private"` | `"private"` or `"public"`. |
 | `priority` | integer | 100 | 0–1000. Higher values are claimed first. |
@@ -629,7 +629,7 @@ All responses MUST include:
 | `X-Content-Type-Options` | `nosniff` |
 | `Referrer-Policy` | `no-referrer` |
 | `Cache-Control` | `no-store` |
-| `X-Intent-Version` | Server protocol version |
+| `X-Intent-Version` | `2.1` |
 
 ---
 
@@ -655,7 +655,7 @@ Common error codes:
 | `not_found` | 404 | Intent or resource not found |
 | `invalid_request` | 400 | Missing required fields |
 | `invalid_payload` | 400 | Malformed payload |
-| `payload_too_large` | 413 | Total request body exceeds 8KB limit |
+| `payload_too_large` | 413 | The 'payload' field's serialized content exceeds 7KB limit. |
 | `idempotency_conflict` | 422 | Key reused with different body |
 | `rate_limited` | 429 | Too many requests |
 | `limit_exceeded` | 429 | Open intent cap reached |
@@ -714,7 +714,7 @@ The protocol does NOT guarantee:
 - Replay attacks are mitigated by Strict Auth (nonce + timestamp window)
 - Concurrency attacks are mitigated by ephemeral `claim_token` validation
 - Rate limiting: 60 requests/minute per tester key
-- Request body size limit: 8KB total per request
+- Payload field content limit: 7KB. Total request body limit: 8KB.
 - Open intent cap: 2000 open intents per tester key (the main `BUS_SECRET` key is exempt)
 - Dead letters are retained for 7 days
 - Fulfilled intents are retained for 7 days
@@ -737,7 +737,7 @@ The protocol does NOT guarantee:
 - Version: 2.1 (Server API v7.61)
 - Breaking changes MUST increment the major version
 - Additive changes SHOULD be backward-compatible
-- The current protocol version is advertised in the `X-Intent-Version` response header
+- The `X-Intent-Version` response header advertises the protocol version, which is 2.1.
 
 ---
 

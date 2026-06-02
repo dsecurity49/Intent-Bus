@@ -140,7 +140,7 @@ FULFILLED_RETENTION_SECONDS = 7 * 24 * 60 * 60 # Retention for successfully comp
 DEAD_RETENTION_SECONDS = 7 * 24 * 60 * 60 # Retention for dead intents (7 days).
 # These retention policies help manage database size and data lifecycle.
 
-MAX_PAYLOAD = 8 * 1024
+MAX_PAYLOAD = 7 * 1024 # Limit for the 'payload' and 'result' fields specifically
 MAX_TTL = 86400
 MAX_OPEN_INTENTS_PER_KEY = 2000
 
@@ -892,7 +892,7 @@ def log_response(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Intent-Version"] = "7.61"
+    response.headers["X-Intent-Version"] = "2.1" # Reflects protocol version from SPEC.md
     return response
 
 # =========================================================
