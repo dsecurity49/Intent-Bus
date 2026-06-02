@@ -90,3 +90,4 @@ node_modules/
 # =========================
 *.tmp
 *.bak
+.aider*
