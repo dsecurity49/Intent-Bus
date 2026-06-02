@@ -44,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 
 # SQLite is single-writer; use one Gunicorn worker process.
 # Threads are acceptable because SQLite serializes writes internally.
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "120", "--graceful-timeout", "30", "--access-logfile", "-", "--error-logfile", "-", "flask_app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "120", "--graceful-timeout", "30", "--access-logfile", "-", "--error-logfile", "-", "flask_app:app"]
