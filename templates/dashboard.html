@@ -1,0 +1,92 @@
+
+{% autoescape true %} {# Prevent XSS in rendered templates. #}
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Intent Bus Dashboard</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0d1117; color:#c9d1d9; padding:20px; }
+    h1,h2 { margin: 0.2em 0; }
+    .grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px; margin: 16px 0; }
+    .card { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:12px; }
+    table { width:100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border-bottom:1px solid #30363d; padding:8px; text-align:left; font-size: 14px; }
+    code { background:#161b22; padding:2px 4px; border-radius:4px; }
+    .muted { color:#8b949e; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Intent Bus</h1>
+  <div class="muted">Version {{ version }}</div>
+  <div class="muted">Dead letters: {{ stats.dead_letters }}</div>
+
+  <div class="grid">
+    <div class="card"><h2>{{ stats.open }}</h2><div>Open</div></div>
+    <div class="card"><h2>{{ stats.claimed }}</h2><div>Claimed</div></div>
+    <div class="card"><h2>{{ stats.fulfilled }}</h2><div>Fulfilled</div></div>
+    <div class="card"><h2>{{ stats.dead }}</h2><div>Dead</div></div>
+  </div>
+
+  <div class="card">
+    <h2>Recent Intents</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th><th>Namespace</th><th>Goal</th><th>Status</th>
+          <th>Priority</th><th>Worker</th><th>Capability</th><th>Attempts</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for i in intents %}
+        <tr>
+          <td><code>{{ i.id }}</code></td>
+          <td>{{ i.namespace }}</td>
+          <td>{{ i.goal }}</td>
+          <td>{{ i.status }}</td>
+          <td>{{ i.priority }}</td>
+          <td>{{ i.target_worker or "" }}</td>
+          <td>{{ i.required_capability or "" }}</td>
+          <td>{{ i.claim_attempts }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Tester Keys</h2>
+    <table>
+      <thead><tr><th>Owner</th><th>Requests</th><th>Created</th></tr></thead>
+      <tbody>
+      {% for k in keys %}
+        <tr>
+          <td>{{ k.owner }}</td>
+          <td>{{ k.total_requests }}</td>
+          <td>{{ k.created_at|int }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Dead Letters</h2>
+    <table>
+      <thead><tr><th>Intent</th><th>Namespace</th><th>Goal</th><th>Attempts</th><th>Reason</th></tr></thead>
+      <tbody>
+      {% for d in dead %}
+        <tr>
+          <td><code>{{ d.intent_id }}</code></td>
+          <td>{{ d.namespace }}</td>
+          <td>{{ d.goal }}</td>
+          <td>{{ d.attempts }}</td>
+          <td>{{ d.reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
+{% endautoescape %}
