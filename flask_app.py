@@ -12,6 +12,13 @@ import threading
 import uuid
 from urllib.parse import urlencode, parse_qsl, quote
 
+try:
+    import requests as http_requests
+    HAS_REQUESTS = True
+except ImportError:
+    http_requests = None
+    HAS_REQUESTS = False
+
 from flask import Flask, request, jsonify, g, Response, render_template, render_template_string, has_request_context
 
 try:
@@ -379,7 +386,8 @@ def setup_schema(db):
         failed_at            REAL,
         result               TEXT,
         result_type          TEXT,
-        completed_at         REAL
+        completed_at         REAL,
+        callback_url         TEXT
     )
     """)
 
@@ -1064,6 +1072,42 @@ def get_value(key):
         return api_error("not_found", "Key not found.", 404)
     return jsonify({"value": row["value"]})
 
+def fire_callback(intent_data):
+    """Fire a callback_url for the given intent data."""
+    callback_url = intent_data.get("callback_url")
+    if not callback_url or not HAS_REQUESTS:
+        return
+
+    payload = {
+        "id": intent_data["id"],
+        "namespace": intent_data.get("namespace", "default"),
+        "goal": intent_data.get("goal"),
+        "status": intent_data.get("status"),
+        "error": intent_data.get("last_error"),
+    }
+    if intent_data.get("result"):
+        try:
+            payload["result"] = json.loads(intent_data["result"])
+        except Exception:
+            payload["result"] = intent_data["result"]
+        payload["result_type"] = intent_data.get("result_type")
+        payload["completed_at"] = intent_data.get("completed_at")
+
+    try:
+        http_requests.post(
+            callback_url,
+            json=payload,
+            timeout=10,
+            headers={"User-Agent": "IntentBus-Callback/2.1"},
+        )
+    except Exception as e:
+        app.logger.warning("callback_failed", extra={
+            "intent_id": intent_data["id"],
+            "callback_url": callback_url,
+            "error": str(e),
+        })
+
+
 # =========================================================
 # INTENT CREATION
 # =========================================================
@@ -1116,6 +1160,10 @@ def create_intent():
     if required_capability and not valid_label(required_capability):
         return api_error("invalid_required_capability", "required_capability must be 1-64 safe characters.")
 
+    callback_url = str(data.get("callback_url", "")).strip()[:512]
+    if callback_url and not (callback_url.startswith("http://") or callback_url.startswith("https://")):
+        return api_error("invalid_callback_url", "callback_url must be http:// or https://.", 400)
+
     body_hash = None
     if idem_key:
         body_hash = hashlib.sha256(
@@ -1161,8 +1209,8 @@ def create_intent():
                 id, namespace, goal, payload, status, priority,
                 target_worker, required_capability,
                 created_at, expires_at, run_at,
-                publisher, max_attempts, backoff_base, visibility
-            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                publisher, max_attempts, backoff_base, visibility, callback_url
+            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             iid,
             namespace,
@@ -1178,6 +1226,7 @@ def create_intent():
             max_attempts,
             backoff_base,
             visibility,
+            callback_url or None,
         ))
 
         response_body = json.dumps({
@@ -1472,7 +1521,22 @@ def fail(iid):
                 WHERE id = ?
             """, (next_run, error_text, iid))
 
+        # Fetch intent data for callback
+        callback_row = db.execute(
+            "SELECT id, namespace, goal, result, result_type, completed_at, callback_url, last_error "
+            "FROM intents WHERE id = ?",
+            (iid,)
+        ).fetchone()
         db.commit()
+
+        # Fire callback if configured (non-blocking)
+        if callback_row and callback_row["callback_url"]:
+            threading.Thread(
+                target=fire_callback,
+                args=(dict(callback_row),),
+                daemon=True,
+            ).start()
+
         return jsonify({"ok": True, "id": iid}), 200
 
     except sqlite3.OperationalError:
@@ -1558,6 +1622,22 @@ def fulfill(iid):
             WHERE id = ?
         """, (result_text, result_type if result_text is not None else None, now(), iid))
         db.commit()
+
+        # Fire callback on dead transition if configured
+        if row["claim_attempts"] >= row["max_attempts"]:
+            callback_data = {
+                "id": iid,
+                "namespace": row["namespace"],
+                "goal": row["goal"],
+                "status": "dead",
+                "last_error": error_text,
+            }
+            threading.Thread(
+                target=fire_callback,
+                args=(callback_data,),
+                daemon=True,
+            ).start()
+
         return jsonify({"ok": True, "id": iid}), 200
 
     except sqlite3.OperationalError:
