@@ -192,7 +192,12 @@ def is_local():
 
 
 def is_busy_or_locked(exc):
-    return "locked" in str(exc).lower() or "busy" in str(exc).lower()
+    # Use sqlite3 error codes for reliable, locale-independent detection.
+    if hasattr(exc, 'sqlite_errorcode'):
+        return exc.sqlite_errorcode in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    # Fallback for non-sqlite3 exceptions.
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
 
 
 def is_json_safe(obj, max_depth=10, depth=0):
@@ -585,10 +590,10 @@ def verify_signed_request(api_key):
         except Exception:
             pass
         return False, "Database busy, please retry"
-    except Exception:
+    except (sqlite3.OperationalError, sqlite3.IntegrityError):
         try:
             db.rollback()
-        except Exception:
+        except (sqlite3.OperationalError, sqlite3.IntegrityError):
             pass
         return False, "Internal error during signature validation"
 
@@ -657,9 +662,21 @@ def run_cleanup_once():
             "DELETE FROM request_nonces WHERE created_at < ?", (t - NONCE_RETENTION_SECONDS,))
         stats["nonces_deleted"] = cur.rowcount
 
+        # Archive expired open intents to dead_letters before deletion
+        expired_open = db.execute(
+            "SELECT id, namespace, goal, payload, publisher, visibility, claim_attempts "
+            "FROM intents WHERE status='open' AND expires_at < ?",
+            (t,)
+        ).fetchall()
+
+        for row in expired_open:
+            archive_dead_letter(db, row, "Expired unclaimed")
+            stats["expired_open_deleted"] += 1
+
+        # Delete after archiving
         cur = db.execute(
             "DELETE FROM intents WHERE status='open' AND expires_at < ?", (t,))
-        stats["expired_open_deleted"] = cur.rowcount
+        
 
         expired_claims = db.execute("""
             SELECT id, namespace, goal, payload, publisher, visibility,
@@ -739,9 +756,13 @@ def run_cleanup_once():
         if db:
             try:
                 db.rollback()
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception:
                 pass
         return False, stats
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception as e:
         app.logger.error(f"Cleanup failed: {e}")
         if db:
@@ -836,9 +857,13 @@ def security():
         except sqlite3.OperationalError:
             try:
                 db.rollback()
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception:
                 pass
             return api_error("database_busy", "Database busy, please retry.", 503)
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             try:
                 db.rollback()
@@ -1104,9 +1129,13 @@ def set_value(key):
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1262,9 +1291,13 @@ def create_intent():
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1398,6 +1431,8 @@ def claim():
             r.headers["Retry-After"] = "1"
             return r
         return api_error("database_error", "Database error.", 500)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1446,9 +1481,13 @@ def extend_claim(iid):
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1531,9 +1570,13 @@ def fail(iid):
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1612,9 +1655,13 @@ def fulfill(iid):
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1734,9 +1781,13 @@ def admin_generate_key():
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1774,9 +1825,13 @@ def admin_revoke_key():
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1825,9 +1880,13 @@ def admin_purge():
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1927,9 +1986,13 @@ def admin_cancel_intent(iid):
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
@@ -1981,9 +2044,13 @@ def admin_retry_intent(iid):
     except sqlite3.OperationalError:
         try:
             db.rollback()
+        except (KeyboardInterrupt, SystemExit):
+            raise
         except Exception:
             pass
         return api_error("database_busy", "Database busy.", 503)
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         try:
             db.rollback()
